@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+build/
+dist/
+*.spec
+.DS_Store
+*.exe
+*.app
+*.dmg
+*.zip
+lianzai_backup*/
