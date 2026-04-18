@@ -18,15 +18,15 @@ import requests
 
 # ── 主题色 ────────────────────────────────────────────────────────────────
 
-BG       = "#0f0f12"
-BG_INPUT = "#1a1a20"
-BG_BTN   = "#2a2a35"
-ACCENT   = "#7c6af7"
-FG       = "#e8e8f0"
-FG_DIM   = "#666675"
-BORDER   = "#2a2a35"
-SUCCESS  = "#5aab7a"
-ERROR    = "#e06c6c"
+BG       = "#ffffff"
+BG_INPUT = "#f5f5f5"
+BG_BTN   = "#eeeeee"
+ACCENT   = "#5aab6e"
+FG       = "#1a1a1a"
+FG_DIM   = "#888888"
+BORDER   = "#e0e0e0"
+SUCCESS  = "#5aab6e"
+ERROR    = "#d94f4f"
 
 
 # ── 抓取逻辑（Worker 线程）────────────────────────────────────────────────
@@ -298,7 +298,7 @@ class MainWindow(QMainWindow):
                 border: none; border-radius: 6px;
                 padding: 8px 18px; font-size: 13px;
             }}
-            QPushButton:hover {{ background: #333340; }}
+            QPushButton:hover {{ background: #e0e0e0; }}
             QPushButton:disabled {{ color: {FG_DIM}; }}
             QProgressBar {{
                 background: {BG_INPUT}; border: none; border-radius: 4px; height: 6px;
@@ -308,7 +308,7 @@ class MainWindow(QMainWindow):
                 background: transparent; width: 4px; margin: 0;
             }}
             QScrollBar::handle:vertical {{
-                background: #333340; border-radius: 2px; min-height: 20px;
+                background: #cccccc; border-radius: 2px; min-height: 20px;
             }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
@@ -335,9 +335,8 @@ class MainWindow(QMainWindow):
         root.addWidget(line)
 
         # UID
-        root.addWidget(self._label("你的 UID"))
         self._uid_edit = QLineEdit()
-        self._uid_edit.setPlaceholderText("你的轻想号，如 101883")
+        self._uid_edit.setPlaceholderText("你的轻想号")
         self._uid_edit.setFixedHeight(38)
         root.addWidget(self._uid_edit)
 
@@ -376,7 +375,7 @@ class MainWindow(QMainWindow):
                 border: none; border-radius: 6px;
                 font-size: 14px; font-weight: bold;
             }}
-            QPushButton:hover {{ background: #8b7fc0; }}
+            QPushButton:hover {{ background: #4e9860; }}
             QPushButton:disabled {{ background: {BG_BTN}; color: {FG_DIM}; }}
         """)
         self._start_btn.clicked.connect(self._start)
