@@ -49,7 +49,6 @@ jobs:
             --icon-size 100 \
             --icon "轻想连载导出.app" 180 170 \
             --app-drop-link 480 170 \
-            --background-color "#0f0f12" \
             --hide-extension "轻想连载导出.app" \
             "lianzai_export_${{ github.event.inputs.version }}_macos.dmg" \
             "dist/"
