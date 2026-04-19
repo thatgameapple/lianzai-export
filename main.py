@@ -176,7 +176,18 @@ class ExportWorker(QThread):
         created    = self._ts(plan.get("createdTs", 0))
         updated_ts = plan.get("updatedTs", 0)
 
-        plan_dir = self.out_dir / self._safe_name(title)
+        safe_title = self._safe_name(title)
+        plan_dir = self.out_dir / safe_title
+        # 如果目录已存在但 planId 不同，用 planId 区分
+        if plan_dir.exists():
+            existing_raw = plan_dir / "raw.json"
+            if existing_raw.exists():
+                try:
+                    existing_id = json.loads(existing_raw.read_text(encoding="utf-8")).get("plan_info", {}).get("planId")
+                    if existing_id and existing_id != plan_id:
+                        plan_dir = self.out_dir / f"{safe_title}_{plan_id}"
+                except Exception:
+                    pass
         plan_dir.mkdir(exist_ok=True)
         img_dir = plan_dir / "images"
         img_dir.mkdir(exist_ok=True)
