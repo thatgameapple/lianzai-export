@@ -812,11 +812,6 @@ class StageCard(QWidget):
             cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cell.setStyleSheet(f"color: {FG_DIM}; font-size: 12px; border: none;")
             stats_l.addWidget(cell, 1)
-            if i < 2:
-                div = QFrame()
-                div.setFrameShape(QFrame.Shape.VLine)
-                div.setStyleSheet(f"color: {BORDER};")
-                stats_l.addWidget(div)
 
         card_l.addWidget(stats_bar)
 
