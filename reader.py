@@ -63,7 +63,6 @@ def circular_pixmap(path: Path, size: int) -> QPixmap:
 # ── 用户横幅 ──────────────────────────────────────────────────────────────
 
 class BannerWidget(QWidget):
-    switch_clicked  = pyqtSignal(int, int)  # 昵称标签底部中心全局坐标 (x, y)
     random_clicked  = pyqtSignal()   # 随机回忆
     today_clicked   = pyqtSignal()   # 那年今日
 
@@ -146,13 +145,6 @@ class BannerWidget(QWidget):
             center_l.addWidget(sig_lbl)
         center_l.addWidget(stats_w)
 
-        # 昵称可点击（触发切换），传递标签底部中心的全局坐标
-        self._name_lbl = name
-        name.setCursor(Qt.CursorShape.PointingHandCursor)
-        def _name_clicked(e, lbl=name):
-            bottom_center = lbl.mapToGlobal(QPoint(lbl.width() // 2, lbl.height()))
-            self.switch_clicked.emit(bottom_center.x(), bottom_center.y())
-        name.mousePressEvent = _name_clicked
 
         layout.addWidget(center, 1)
 
@@ -495,7 +487,6 @@ class MemoryDialog(QDialog):
 
 class HomeView(QWidget):
     plan_selected  = pyqtSignal(int)
-    switch_account = pyqtSignal(int, int)  # 昵称底部中心全局坐标
 
     def __init__(self, user_info: dict, plan_dirs: list, plan_metas: list, backup_dir: Path):
         super().__init__()
@@ -509,7 +500,6 @@ class HomeView(QWidget):
 
         # 横幅
         banner = BannerWidget(user_info, backup_dir)
-        banner.switch_clicked.connect(lambda x, y: self.switch_account.emit(x, y))
         banner.random_clicked.connect(self._show_random)
         banner.today_clicked.connect(self._show_on_this_day)
         root.addWidget(banner)
@@ -985,7 +975,9 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._build_ui()
         # 启动时恢复上次打开的文件夹
-        self._restore_last_session()
+        last = self._settings.value("last_folder", "")
+        if last and Path(last).exists():
+            self._load_backup(Path(last))
 
     def _build_ui(self):
         self.setStyleSheet(f"QMainWindow {{ background: {BG}; }}")
@@ -1051,7 +1043,7 @@ class MainWindow(QMainWindow):
 
     def _load_backup(self, backup_dir: Path):
         self._backup_dir = backup_dir
-        self._save_to_history(backup_dir)
+        self._settings.setValue("last_folder", str(backup_dir))
 
         # 读用户信息
         user_info = {}
@@ -1088,7 +1080,6 @@ class MainWindow(QMainWindow):
 
         self._home_view = HomeView(user_info, self._plan_dirs, self._plan_metas, backup_dir)
         self._home_view.plan_selected.connect(self._show_plan)
-        self._home_view.switch_account.connect(self._switch_account_menu)
         self._stack.insertWidget(1, self._home_view)
         self._stack.setCurrentWidget(self._home_view)
 
@@ -1101,155 +1092,6 @@ class MainWindow(QMainWindow):
         if self._home_view:
             self._stack.setCurrentWidget(self._home_view)
 
-    def _save_to_history(self, path: Path):
-        """保存文件夹到历史记录（最多5个）"""
-        history = self._settings.value("history", [])
-        if not isinstance(history, list):
-            history = [history] if history else []
-        path_str = str(path)
-        if path_str in history:
-            history.remove(path_str)
-        history.insert(0, path_str)
-        history = history[:5]
-        self._settings.setValue("history", history)
-        self._update_combo(history)
-
-    def _update_combo(self, history: list):
-        pass  # combo 已移除，切换通过点横幅实现
-
-    def _folder_display_name(self, path: Path) -> str:
-        ui = path / "user_info.json"
-        if ui.exists():
-            try:
-                info = json.loads(ui.read_text(encoding="utf-8"))
-                nick = info.get("nickName", info.get("nickname", ""))
-                if nick:
-                    return nick
-            except Exception:
-                pass
-        return path.name
-
-    def _on_account_selected(self, idx: int):
-        path_str = self._account_combo.itemData(idx)
-        if path_str:
-            self._load_backup(Path(path_str))
-
-    def _switch_account_menu(self, anchor_x: int = -1, anchor_y: int = -1):
-        """弹出账号切换浮层，定位在昵称标签正下方"""
-        history = self._settings.value("history", [])
-        if not isinstance(history, list):
-            history = [history] if history else []
-        valid = [p for p in history if Path(p).exists()]
-
-        popup = QFrame(self, Qt.WindowType.Popup)
-        popup.setStyleSheet(f"""
-            QFrame {{
-                background: {BG_WHITE};
-                border: 1px solid {BORDER};
-                border-radius: 10px;
-            }}
-        """)
-        effect = QGraphicsDropShadowEffect()
-        effect.setBlurRadius(20)
-        effect.setOffset(0, 4)
-        effect.setColor(QColor(0, 0, 0, 40))
-        popup.setGraphicsEffect(effect)
-
-        pop_l = QVBoxLayout(popup)
-        pop_l.setContentsMargins(8, 10, 8, 10)
-        pop_l.setSpacing(2)
-
-        # 标题
-        title = QLabel("我的记忆")
-        title.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; padding: 0 8px 4px 8px; border: none;")
-        pop_l.addWidget(title)
-
-        current = str(self._backup_dir) if self._backup_dir else ""
-
-        for p in valid:
-            name = self._folder_display_name(Path(p))
-            is_current = p == current
-
-            row = QWidget()
-            row.setStyleSheet(f"""
-                QWidget {{
-                    background: {'#e8f5ec' if is_current else 'transparent'};
-                    border-radius: 6px;
-                    border-left: {'3px solid ' + ACCENT if is_current else '3px solid transparent'};
-                }}
-                QWidget:hover {{ background: #f0f8f2; }}
-            """)
-            row.setCursor(Qt.CursorShape.PointingHandCursor)
-            row_l = QHBoxLayout(row)
-            row_l.setContentsMargins(10, 6, 8, 6)
-            row_l.setSpacing(8)
-
-            name_lbl = QLabel(name)
-            name_lbl.setStyleSheet(f"color: {ACCENT if is_current else FG}; font-size: 13px; {'font-weight: bold;' if is_current else ''} border: none; background: transparent;")
-            row_l.addWidget(name_lbl, 1)
-
-            rm_btn = QPushButton("×")
-            rm_btn.setFixedSize(18, 18)
-            rm_btn.setStyleSheet(f"color: {FG_DIM}; background: transparent; border: none; font-size: 14px;")
-            rm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            rm_btn.clicked.connect(lambda _, path=p: self._remove_history(path, popup))
-            row_l.addWidget(rm_btn)
-
-            row.mousePressEvent = lambda e, path=p: (popup.close(), self._load_backup(Path(path)))
-            pop_l.addWidget(row)
-
-        # 分隔线
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet(f"color: {BORDER}; border: none; background: {BORDER}; max-height: 1px; margin: 4px 0;")
-        pop_l.addWidget(sep)
-
-        # 添加按钮
-        add_btn = QPushButton("+ 添加备份文件夹")
-        add_btn.setStyleSheet(f"""
-            QPushButton {{ background: transparent; border: none; color: {ACCENT};
-                           font-size: 13px; text-align: left; padding: 6px 10px; border-radius: 6px; }}
-            QPushButton:hover {{ background: #f0f8f2; }}
-        """)
-        add_btn.clicked.connect(lambda: (popup.close(), self._open_folder()))
-        pop_l.addWidget(add_btn)
-
-        popup.adjustSize()
-        # 定位：弹窗顶部中心对齐昵称标签底部中心，向下偏移 8px
-        if anchor_x >= 0 and anchor_y >= 0:
-            x = anchor_x - popup.width() // 2
-            y = anchor_y + 8
-        else:
-            pos = QCursor.pos()
-            x = pos.x() - popup.width() // 2
-            y = pos.y() + 12
-        # 防止超出屏幕右边
-        screen_w = self.screen().geometry().width()
-        if x + popup.width() > screen_w - 8:
-            x = screen_w - popup.width() - 8
-        if x < 8:
-            x = 8
-        popup.move(x, y)
-        popup.show()
-
-    def _remove_history(self, path: str, popup=None):
-        if popup:
-            popup.close()
-        history = self._settings.value("history", [])
-        if not isinstance(history, list):
-            history = [history] if history else []
-        if path in history:
-            history.remove(path)
-            self._settings.setValue("history", history)
-
-    def _restore_last_session(self):
-        history = self._settings.value("history", [])
-        if not isinstance(history, list):
-            history = [history] if history else []
-        valid = [p for p in history if Path(p).exists()]
-        self._update_combo(valid)
-        if valid:
-            self._load_backup(Path(valid[0]))
 
 
 if __name__ == "__main__":
