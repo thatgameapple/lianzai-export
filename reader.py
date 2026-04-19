@@ -801,17 +801,16 @@ class StageCard(QWidget):
         comment_count = stage.get("commentCount", 0)
 
         stats_bar = QWidget()
-        stats_bar.setFixedHeight(40)
-        stats_bar.setStyleSheet(f"border: none; border-top: 1px solid {BORDER};")
+        stats_bar.setStyleSheet("border: none; background: transparent;")
         stats_l = QHBoxLayout(stats_bar)
-        stats_l.setContentsMargins(0, 0, 0, 0)
-        stats_l.setSpacing(0)
+        stats_l.setContentsMargins(0, 8, 0, 4)
+        stats_l.setSpacing(16)
 
-        for i, (icon, val) in enumerate([("推荐", recommend), ("评论", comment_count), ("👍", praise)]):
-            cell = QLabel(f"{icon}  {val}")
-            cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cell.setStyleSheet(f"color: {FG_DIM}; font-size: 12px; border: none;")
-            stats_l.addWidget(cell, 1)
+        for icon, val in [("推荐", recommend), ("评论", comment_count), ("👍", praise)]:
+            cell = QLabel(f"{icon} {val}")
+            cell.setStyleSheet(f"color: {FG_DIM}; font-size: 12px; border: none; background: transparent;")
+            stats_l.addWidget(cell)
+        stats_l.addStretch()
 
         card_l.addWidget(stats_bar)
 
