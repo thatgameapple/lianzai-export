@@ -447,17 +447,13 @@ class MainWindow(QMainWindow):
         """)
         root.addWidget(self._log, 1)
 
-        # 底部按钮行
+        # 底部提示
         bottom = QHBoxLayout()
-        hint = QLabel("导出完成后可直接在轻想纪念版中查看")
-        hint.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-        bottom.addWidget(hint)
+        self._hint_lbl = QLabel("导出完成后，用「轻想纪念版」打开备份文件夹即可查看")
+        self._hint_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        self._hint_lbl.setVisible(False)
+        bottom.addWidget(self._hint_lbl)
         bottom.addStretch()
-        self._open_reader_btn = QPushButton("打开轻想纪念版")
-        self._open_reader_btn.setFixedHeight(30)
-        self._open_reader_btn.setVisible(False)
-        self._open_reader_btn.clicked.connect(self._open_reader)
-        bottom.addWidget(self._open_reader_btn)
         root.addLayout(bottom)
 
     def _accent_btn_style(self, cancel=False):
@@ -528,7 +524,7 @@ class MainWindow(QMainWindow):
         self._progress.setValue(0)
         self._progress.setMaximum(100)
         self._progress_lbl.setText("")
-        self._open_reader_btn.setVisible(False)
+        self._hint_lbl.setVisible(False)
         self._start_btn.setText("取消")
         self._start_btn.setStyleSheet(self._accent_btn_style(cancel=True))
         self._last_out_dir = out_dir
@@ -558,15 +554,9 @@ class MainWindow(QMainWindow):
             self._append_log(f"\n✅ {summary}", SUCCESS)
             self._append_log(f"保存位置：{out_dir}", SUCCESS)
             self._progress.setValue(self._progress.maximum())
-            self._open_reader_btn.setVisible(True)
+            self._hint_lbl.setVisible(True)
         else:
             self._append_log(f"\n❌ {msg}", ERROR)
-
-    def _open_reader(self):
-        reader_path = Path(__file__).parent / "reader.py"
-        if reader_path.exists():
-            import subprocess
-            subprocess.Popen([sys.executable, str(reader_path)])
 
 
 if __name__ == "__main__":
