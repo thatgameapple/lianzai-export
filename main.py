@@ -119,7 +119,8 @@ class ExportWorker(QThread):
 
         avatar = user.get("avatar", "")
         if avatar:
-            ext = avatar.split(".")[-1].split("?")[0] or "jpg"
+            raw_ext = avatar.split(".")[-1].split("?")[0].lower()
+            ext = raw_ext if raw_ext in ("jpg", "jpeg", "png", "gif", "webp") else "jpg"
             self._download_image(s, avatar, self.out_dir / f"avatar.{ext}")
 
         # 2. 连载列表
