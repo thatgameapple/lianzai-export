@@ -8,7 +8,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QScrollArea, QFrame, QFileDialog,
-    QGridLayout, QSizePolicy, QStackedWidget, QTabBar
+    QGridLayout, QSizePolicy, QStackedWidget, QTabBar, QDialog
 )
 from PyQt6.QtCore import Qt, QSize, QUrl, pyqtSignal, QPoint, QRectF
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect
@@ -365,6 +365,89 @@ class PlanGrid(QScrollArea):
         self.setWidget(container)
 
 
+# ── 回忆浮层 ─────────────────────────────────────────────────────────────
+
+class MemoryDialog(QDialog):
+    def __init__(self, parent, header: str, items: list):
+        super().__init__(parent)
+        self.setWindowTitle("")
+        self.setModal(True)
+        self.setFixedWidth(480)
+        self.setMaximumHeight(560)
+        self.setStyleSheet(f"""
+            QDialog {{
+                background: {BG_WHITE};
+                border: 1px solid {BORDER};
+                border-radius: 12px;
+            }}
+        """)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # 标题栏
+        hdr = QWidget()
+        hdr.setFixedHeight(48)
+        hdr.setStyleSheet(f"background: {BG_WHITE}; border-bottom: 1px solid {BORDER};")
+        hdr_l = QHBoxLayout(hdr)
+        hdr_l.setContentsMargins(20, 0, 12, 0)
+        title_lbl = QLabel(header)
+        title_lbl.setFont(QFont("PingFang SC", 14, QFont.Weight.Bold))
+        title_lbl.setStyleSheet(f"color: {FG};")
+        hdr_l.addWidget(title_lbl, 1)
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(28, 28)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; border: none; color: {FG_DIM}; font-size: 20px; }}
+            QPushButton:hover {{ color: {FG}; }}
+        """)
+        close_btn.clicked.connect(self.close)
+        hdr_l.addWidget(close_btn)
+        root.addWidget(hdr)
+
+        # 内容
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background: {BG_WHITE}; }}
+            QScrollBar:vertical {{ background: transparent; width: 4px; }}
+            QScrollBar::handle:vertical {{ background: #cccccc; border-radius: 2px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+        container = QWidget()
+        container.setStyleSheet(f"background: {BG_WHITE};")
+        content_l = QVBoxLayout(container)
+        content_l.setContentsMargins(20, 16, 20, 20)
+        content_l.setSpacing(12)
+
+        if not items:
+            empty = QLabel("今天还没有往年的记忆")
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setStyleSheet(f"color: {FG_DIM}; font-size: 14px; padding: 40px 0;")
+            content_l.addWidget(empty)
+        else:
+            for item in items:
+                card = QWidget()
+                card.setStyleSheet(f"background: {BG}; border-radius: 8px;")
+                card_l = QVBoxLayout(card)
+                card_l.setContentsMargins(14, 12, 14, 12)
+                card_l.setSpacing(6)
+                meta = QLabel(f"{item['plan_title']}  ·  {item['date']}")
+                meta.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+                card_l.addWidget(meta)
+                text_lbl = QLabel(item['text'][:300] + ("…" if len(item['text']) > 300 else ""))
+                text_lbl.setWordWrap(True)
+                text_lbl.setStyleSheet(f"color: {FG}; font-size: 14px; line-height: 1.6;")
+                text_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                card_l.addWidget(text_lbl)
+                content_l.addWidget(card)
+
+        content_l.addStretch()
+        scroll.setWidget(container)
+        root.addWidget(scroll)
+
+
 # ── 主页 ──────────────────────────────────────────────────────────────────
 
 class HomeView(QWidget):
@@ -372,6 +455,8 @@ class HomeView(QWidget):
 
     def __init__(self, user_info: dict, plan_dirs: list, plan_metas: list, backup_dir: Path):
         super().__init__()
+        self._plan_dirs  = plan_dirs
+        self._plan_metas = plan_metas
         self.setStyleSheet(f"background: {BG};")
 
         root = QVBoxLayout(self)
@@ -422,6 +507,16 @@ class HomeView(QWidget):
         tab_l.addWidget(self._tab_ongoing)
         tab_l.addWidget(self._tab_finished)
         tab_l.addStretch()
+
+        for label, slot in [("随机回忆", self._show_random), ("那年今日", self._show_on_this_day)]:
+            btn = QPushButton(label)
+            btn.setFixedHeight(48)
+            btn.setStyleSheet(f"""
+                QPushButton {{ background: transparent; border: none; color: {FG_DIM}; font-size: 13px; padding: 0 10px; }}
+                QPushButton:hover {{ color: {ACCENT}; }}
+            """)
+            btn.clicked.connect(slot)
+            tab_l.addWidget(btn)
         right_l.addWidget(tab_bar)
 
         # 网格区（stacked）
@@ -461,6 +556,53 @@ class HomeView(QWidget):
                     }}
                     QPushButton:hover {{ color: {ACCENT}; }}
                 """)
+
+    def _collect_stages(self):
+        results = []
+        for plan_dir, meta in zip(self._plan_dirs, self._plan_metas):
+            raw_path = plan_dir / "raw.json"
+            if not raw_path.exists():
+                continue
+            try:
+                raw = json.loads(raw_path.read_text(encoding="utf-8"))
+                for stage in raw.get("stages", []):
+                    html = stage.get("html", "")
+                    text = re.sub(r"<[^>]+>", "", html).strip()
+                    if text:
+                        results.append((stage, meta["title"]))
+            except Exception:
+                pass
+        return results
+
+    def _show_random(self):
+        import random
+        all_stages = self._collect_stages()
+        if not all_stages:
+            return
+        stage, plan_title = random.choice(all_stages)
+        html = stage.get("html", "")
+        text = re.sub(r"<[^>]+>", "", html).strip()
+        date = ts_to_str(stage.get("publishTs", 0), "%Y-%m-%d")
+        dlg = MemoryDialog(self, "随机回忆", [{"plan_title": plan_title, "date": date, "text": text}])
+        dlg.exec()
+
+    def _show_on_this_day(self):
+        from datetime import datetime
+        today = datetime.now()
+        items = []
+        for stage, plan_title in self._collect_stages():
+            ts = stage.get("publishTs", 0)
+            if not ts:
+                continue
+            dt = datetime.fromtimestamp(int(ts) / 1000)
+            if dt.month == today.month and dt.day == today.day and dt.year != today.year:
+                html = stage.get("html", "")
+                text = re.sub(r"<[^>]+>", "", html).strip()
+                if text:
+                    items.append({"plan_title": plan_title, "date": ts_to_str(ts, "%Y-%m-%d"), "text": text})
+        items.sort(key=lambda x: x["date"], reverse=True)
+        dlg = MemoryDialog(self, "那年今日", items)
+        dlg.exec()
 
 
 # ── 封面英雄横幅 ─────────────────────────────────────────────────────────
@@ -543,20 +685,44 @@ class StageCard(QWidget):
         left = QWidget()
         left.setFixedWidth(60)
         left.setStyleSheet("background: transparent;")
-        left_l = QHBoxLayout(left)
+        left_l = QVBoxLayout(left)
         left_l.setContentsMargins(0, 16, 4, 0)
         left_l.setSpacing(2)
-        left_l.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+
+        # 编号 + 小绿点
+        num_row = QWidget()
+        num_row.setStyleSheet("background: transparent;")
+        num_row_l = QHBoxLayout(num_row)
+        num_row_l.setContentsMargins(0, 0, 0, 0)
+        num_row_l.setSpacing(2)
+        num_row_l.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         num_lbl = QLabel(str(index))
         num_lbl.setFont(QFont("PingFang SC", 15, QFont.Weight.Bold))
         num_lbl.setStyleSheet(f"color: {ACCENT}; background: transparent;")
-        left_l.addWidget(num_lbl)
+        num_row_l.addWidget(num_lbl)
 
         dot_lbl = QLabel("●")
         dot_lbl.setFont(QFont("PingFang SC", 8))
         dot_lbl.setStyleSheet(f"color: {ACCENT}; background: transparent;")
-        left_l.addWidget(dot_lbl)
+        num_row_l.addWidget(dot_lbl)
+
+        left_l.addWidget(num_row)
+
+        # 细连接线（贯穿到底）
+        line_wrap = QWidget()
+        line_wrap.setStyleSheet("background: transparent;")
+        line_wrap_l = QHBoxLayout(line_wrap)
+        line_wrap_l.setContentsMargins(0, 0, 0, 0)
+        line_wrap_l.setSpacing(0)
+        line_wrap_l.addStretch()
+        vline = QFrame()
+        vline.setFrameShape(QFrame.Shape.VLine)
+        vline.setFixedWidth(1)
+        vline.setStyleSheet("color: #dddddd;")
+        line_wrap_l.addWidget(vline)
+        line_wrap_l.addSpacing(4)
+        left_l.addWidget(line_wrap, 1)
 
         row.addWidget(left)
 
@@ -755,33 +921,13 @@ class PlanDetailView(QWidget):
         hero = HeroCoverWidget(cover_path, title, subtitle)
         self._layout.insertWidget(self._layout.count() - 1, hero)
 
-        # 统计栏（热度 + 见证）
-        heat = plan.get("heatValue", plan.get("heat", 0)) or 0
-        stats_bar = QWidget()
-        stats_bar.setFixedHeight(44)
-        stats_bar.setStyleSheet(f"background: {BG_WHITE}; border-bottom: 1px solid {BORDER};")
-        stats_l = QHBoxLayout(stats_bar)
-        stats_l.setContentsMargins(20, 0, 20, 0)
-        stats_l.setSpacing(20)
-
-        heat_lbl = QLabel(f"🔥 {heat}")
-        heat_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 13px;")
-        stats_l.addWidget(heat_lbl)
-
-        if witnesses:
-            wit_lbl = QLabel(f"{witnesses} 人在见证")
-            wit_lbl.setStyleSheet(f"color: {ACCENT}; font-size: 13px; font-weight: bold;")
-            stats_l.addWidget(wit_lbl)
-
-        stats_l.addStretch()
-        self._layout.insertWidget(self._layout.count() - 1, stats_bar)
 
         # 阶段列表区域（带左边距的容器）
         stages_container = QWidget()
         stages_container.setStyleSheet(f"background: {BG};")
         stages_l = QVBoxLayout(stages_container)
-        stages_l.setContentsMargins(16, 8, 0, 0)
-        stages_l.setSpacing(0)
+        stages_l.setContentsMargins(16, 4, 0, 0)
+        stages_l.setSpacing(0)  # 无间距，让左侧细线视觉上连续
 
         stages_sorted = sorted(stages, key=lambda s: s.get("publishTs", 0))
         total = len(stages_sorted)
@@ -799,7 +945,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("轻想纪念版")
-        self.resize(1100, 720)
+        self.setFixedSize(900, 680)
         self._backup_dir = None
         self._plan_dirs = []
         self._plan_metas = []
