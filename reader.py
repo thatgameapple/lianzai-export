@@ -8,13 +8,13 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QScrollArea, QFrame, QFileDialog,
-    QGridLayout, QSizePolicy, QStackedWidget, QTabBar, QDialog
+    QGridLayout, QSizePolicy, QStackedWidget, QTabBar, QDialog, QComboBox
 )
-from PyQt6.QtCore import Qt, QSize, QUrl, pyqtSignal, QPoint, QRectF
+from PyQt6.QtCore import Qt, QSize, QUrl, pyqtSignal, QPoint, QRectF, QSettings
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect
 from PyQt6.QtGui import (
     QFont, QPixmap, QPainter, QPainterPath, QColor,
-    QLinearGradient, QBrush, QPen, QBitmap, QRegion
+    QLinearGradient, QBrush, QPen, QBitmap, QRegion, QCursor
 )
 
 # ── 主题 ──────────────────────────────────────────────────────────────────
@@ -63,6 +63,10 @@ def circular_pixmap(path: Path, size: int) -> QPixmap:
 # ── 用户横幅 ──────────────────────────────────────────────────────────────
 
 class BannerWidget(QWidget):
+    switch_clicked  = pyqtSignal()   # 点左下角胶囊
+    random_clicked  = pyqtSignal()   # 随机回忆
+    today_clicked   = pyqtSignal()   # 那年今日
+
     def __init__(self, user_info: dict, backup_dir: Path):
         super().__init__()
         self.setFixedHeight(260)
@@ -78,12 +82,18 @@ class BannerWidget(QWidget):
                     Qt.TransformationMode.SmoothTransformation
                 )
 
+        # 主体：居中排列头像/昵称/签名/统计
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 24, 0, 20)
+        layout.setContentsMargins(0, 24, 0, 0)
         layout.setSpacing(6)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # 头像
+        center = QWidget()
+        center.setStyleSheet("background: transparent;")
+        center_l = QVBoxLayout(center)
+        center_l.setContentsMargins(0, 0, 0, 0)
+        center_l.setSpacing(6)
+        center_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         avatar_lbl = QLabel()
         avatar_lbl.setFixedSize(70, 70)
         avatar_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -91,19 +101,17 @@ class BannerWidget(QWidget):
         if avatar_files:
             avatar_lbl.setPixmap(circular_pixmap(avatar_files[0], 70))
 
-        # 昵称
-        name = QLabel(user_info.get("nickName", ""))
+        nick = user_info.get("nickName", "")
+        name = QLabel(nick)
         name.setFont(QFont("PingFang SC", 17, QFont.Weight.Bold))
         name.setStyleSheet("color: white; background: transparent;")
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # 签名
         sig = user_info.get("sign", user_info.get("signature", user_info.get("bio", "")))
         sig_lbl = QLabel(sig[:50] if sig else "")
         sig_lbl.setStyleSheet("color: rgba(255,255,255,0.8); font-size: 13px; background: transparent;")
         sig_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # 统计（关注 / 粉丝 / 见证）
         stats_w = QWidget()
         stats_w.setStyleSheet("background: transparent;")
         stats_l = QHBoxLayout(stats_w)
@@ -132,11 +140,43 @@ class BannerWidget(QWidget):
             stats_l.addWidget(col)
         stats_l.addStretch()
 
-        layout.addWidget(avatar_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(name)
+        center_l.addWidget(avatar_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
+        center_l.addWidget(name)
         if sig:
-            layout.addWidget(sig_lbl)
-        layout.addWidget(stats_w)
+            center_l.addWidget(sig_lbl)
+        center_l.addWidget(stats_w)
+
+        # 昵称可点击（触发切换）
+        name.setCursor(Qt.CursorShape.PointingHandCursor)
+        name.mousePressEvent = lambda e: self.switch_clicked.emit()
+
+        layout.addWidget(center, 1)
+
+        # 底部栏：右侧随机回忆/那年今日
+        bottom = QWidget()
+        bottom.setFixedHeight(32)
+        bottom.setStyleSheet("background: transparent;")
+        bottom_l = QHBoxLayout(bottom)
+        bottom_l.setContentsMargins(0, 0, 16, 8)
+        bottom_l.setSpacing(0)
+        bottom_l.addStretch()
+
+        for label, sig_name in [("随机回忆", self.random_clicked), ("那年今日", self.today_clicked)]:
+            btn = QPushButton(label)
+            btn.setFixedHeight(24)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet("""
+                QPushButton {
+                    background: transparent; border: none;
+                    color: rgba(255,255,255,0.7); font-size: 12px;
+                    padding: 0 8px;
+                }
+                QPushButton:hover { color: white; }
+            """)
+            btn.clicked.connect(sig_name)
+            bottom_l.addWidget(btn)
+
+        layout.addWidget(bottom)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -149,7 +189,6 @@ class BannerWidget(QWidget):
             grad.setColorAt(0, QColor("#3a7a50"))
             grad.setColorAt(1, QColor("#5aab6e"))
             painter.fillRect(self.rect(), grad)
-        # 半透明遮罩
         painter.fillRect(self.rect(), QColor(0, 0, 0, 80))
         painter.end()
         super().paintEvent(event)
@@ -451,7 +490,8 @@ class MemoryDialog(QDialog):
 # ── 主页 ──────────────────────────────────────────────────────────────────
 
 class HomeView(QWidget):
-    plan_selected = pyqtSignal(int)
+    plan_selected  = pyqtSignal(int)
+    switch_account = pyqtSignal()
 
     def __init__(self, user_info: dict, plan_dirs: list, plan_metas: list, backup_dir: Path):
         super().__init__()
@@ -465,27 +505,11 @@ class HomeView(QWidget):
 
         # 横幅
         banner = BannerWidget(user_info, backup_dir)
+        banner.switch_clicked.connect(self.switch_account)
+        banner.random_clicked.connect(self._show_random)
+        banner.today_clicked.connect(self._show_on_this_day)
         root.addWidget(banner)
 
-        # 随机回忆 / 那年今日（横幅正下方）
-        mem_bar = QWidget()
-        mem_bar.setFixedHeight(36)
-        mem_bar.setStyleSheet(f"background: {BG_WHITE}; border-bottom: 1px solid {BORDER};")
-        mem_l = QHBoxLayout(mem_bar)
-        mem_l.setContentsMargins(0, 0, 0, 0)
-        mem_l.setSpacing(0)
-        mem_l.addStretch()
-        for label, slot in [("随机回忆", self._show_random), ("那年今日", self._show_on_this_day)]:
-            btn = QPushButton(label)
-            btn.setFixedHeight(36)
-            btn.setStyleSheet(f"""
-                QPushButton {{ background: transparent; border: none; border-left: 1px solid {BORDER};
-                               color: {FG_DIM}; font-size: 12px; padding: 0 20px; }}
-                QPushButton:hover {{ color: {ACCENT}; background: #f5fdf7; }}
-            """)
-            btn.clicked.connect(slot)
-            mem_l.addWidget(btn)
-        root.addWidget(mem_bar)
 
         # 内容区（全宽，无侧边栏）
         content = QHBoxLayout()
@@ -953,8 +977,11 @@ class MainWindow(QMainWindow):
         self._backup_dir = None
         self._plan_dirs = []
         self._plan_metas = []
+        self._settings = QSettings("lianzai", "reader")
         self.setAcceptDrops(True)
         self._build_ui()
+        # 启动时恢复上次打开的文件夹
+        self._restore_last_session()
 
     def _build_ui(self):
         self.setStyleSheet(f"QMainWindow {{ background: {BG}; }}")
@@ -1020,6 +1047,7 @@ class MainWindow(QMainWindow):
 
     def _load_backup(self, backup_dir: Path):
         self._backup_dir = backup_dir
+        self._save_to_history(backup_dir)
 
         # 读用户信息
         user_info = {}
@@ -1056,6 +1084,7 @@ class MainWindow(QMainWindow):
 
         self._home_view = HomeView(user_info, self._plan_dirs, self._plan_metas, backup_dir)
         self._home_view.plan_selected.connect(self._show_plan)
+        self._home_view.switch_account.connect(self._switch_account_menu)
         self._stack.insertWidget(1, self._home_view)
         self._stack.setCurrentWidget(self._home_view)
 
@@ -1067,6 +1096,143 @@ class MainWindow(QMainWindow):
     def _show_home(self):
         if self._home_view:
             self._stack.setCurrentWidget(self._home_view)
+
+    def _save_to_history(self, path: Path):
+        """保存文件夹到历史记录（最多5个）"""
+        history = self._settings.value("history", [])
+        if not isinstance(history, list):
+            history = [history] if history else []
+        path_str = str(path)
+        if path_str in history:
+            history.remove(path_str)
+        history.insert(0, path_str)
+        history = history[:5]
+        self._settings.setValue("history", history)
+        self._update_combo(history)
+
+    def _update_combo(self, history: list):
+        pass  # combo 已移除，切换通过点横幅实现
+
+    def _folder_display_name(self, path: Path) -> str:
+        ui = path / "user_info.json"
+        if ui.exists():
+            try:
+                info = json.loads(ui.read_text(encoding="utf-8"))
+                nick = info.get("nickName", info.get("nickname", ""))
+                if nick:
+                    return nick
+            except Exception:
+                pass
+        return path.name
+
+    def _on_account_selected(self, idx: int):
+        path_str = self._account_combo.itemData(idx)
+        if path_str:
+            self._load_backup(Path(path_str))
+
+    def _switch_account_menu(self):
+        """弹出账号切换浮层"""
+        history = self._settings.value("history", [])
+        if not isinstance(history, list):
+            history = [history] if history else []
+        valid = [p for p in history if Path(p).exists()]
+
+        popup = QFrame(self, Qt.WindowType.Popup)
+        popup.setStyleSheet(f"""
+            QFrame {{
+                background: {BG_WHITE};
+                border: 1px solid {BORDER};
+                border-radius: 10px;
+            }}
+        """)
+        effect = QGraphicsDropShadowEffect()
+        effect.setBlurRadius(20)
+        effect.setOffset(0, 4)
+        effect.setColor(QColor(0, 0, 0, 40))
+        popup.setGraphicsEffect(effect)
+
+        pop_l = QVBoxLayout(popup)
+        pop_l.setContentsMargins(8, 10, 8, 10)
+        pop_l.setSpacing(2)
+
+        # 标题
+        title = QLabel("我的记忆")
+        title.setStyleSheet(f"color: {FG_DIM}; font-size: 11px; padding: 0 8px 4px 8px; border: none;")
+        pop_l.addWidget(title)
+
+        current = str(self._backup_dir) if self._backup_dir else ""
+
+        for p in valid:
+            name = self._folder_display_name(Path(p))
+            is_current = p == current
+
+            row = QWidget()
+            row.setStyleSheet(f"""
+                QWidget {{
+                    background: {'#e8f5ec' if is_current else 'transparent'};
+                    border-radius: 6px;
+                    border-left: {'3px solid ' + ACCENT if is_current else '3px solid transparent'};
+                }}
+                QWidget:hover {{ background: #f0f8f2; }}
+            """)
+            row.setCursor(Qt.CursorShape.PointingHandCursor)
+            row_l = QHBoxLayout(row)
+            row_l.setContentsMargins(10, 6, 8, 6)
+            row_l.setSpacing(8)
+
+            name_lbl = QLabel(name)
+            name_lbl.setStyleSheet(f"color: {ACCENT if is_current else FG}; font-size: 13px; {'font-weight: bold;' if is_current else ''} border: none; background: transparent;")
+            row_l.addWidget(name_lbl, 1)
+
+            rm_btn = QPushButton("×")
+            rm_btn.setFixedSize(18, 18)
+            rm_btn.setStyleSheet(f"color: {FG_DIM}; background: transparent; border: none; font-size: 14px;")
+            rm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            rm_btn.clicked.connect(lambda _, path=p: self._remove_history(path, popup))
+            row_l.addWidget(rm_btn)
+
+            row.mousePressEvent = lambda e, path=p: (popup.close(), self._load_backup(Path(path)))
+            pop_l.addWidget(row)
+
+        # 分隔线
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color: {BORDER}; border: none; background: {BORDER}; max-height: 1px; margin: 4px 0;")
+        pop_l.addWidget(sep)
+
+        # 添加按钮
+        add_btn = QPushButton("+ 添加备份文件夹")
+        add_btn.setStyleSheet(f"""
+            QPushButton {{ background: transparent; border: none; color: {ACCENT};
+                           font-size: 13px; text-align: left; padding: 6px 10px; border-radius: 6px; }}
+            QPushButton:hover {{ background: #f0f8f2; }}
+        """)
+        add_btn.clicked.connect(lambda: (popup.close(), self._open_folder()))
+        pop_l.addWidget(add_btn)
+
+        popup.adjustSize()
+        pos = QCursor.pos()
+        popup.move(pos.x() - popup.width() // 2, pos.y() + 12)
+        popup.show()
+
+    def _remove_history(self, path: str, popup=None):
+        if popup:
+            popup.close()
+        history = self._settings.value("history", [])
+        if not isinstance(history, list):
+            history = [history] if history else []
+        if path in history:
+            history.remove(path)
+            self._settings.setValue("history", history)
+
+    def _restore_last_session(self):
+        history = self._settings.value("history", [])
+        if not isinstance(history, list):
+            history = [history] if history else []
+        valid = [p for p in history if Path(p).exists()]
+        self._update_combo(valid)
+        if valid:
+            self._load_backup(Path(valid[0]))
 
 
 if __name__ == "__main__":
