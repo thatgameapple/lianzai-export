@@ -4,15 +4,14 @@
 import sys, re, json, time
 from pathlib import Path
 from datetime import datetime
-from urllib.parse import unquote
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QTextEdit, QPushButton, QProgressBar,
     QFileDialog, QFrame
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QColor, QPalette
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSettings
+from PyQt6.QtGui import QFont
 
 import requests
 
@@ -32,15 +31,15 @@ ERROR    = "#d94f4f"
 # ── 抓取逻辑（Worker 线程）────────────────────────────────────────────────
 
 class ExportWorker(QThread):
-    log     = pyqtSignal(str)        # 日志消息
-    progress = pyqtSignal(int, int)  # current, total
-    finished = pyqtSignal(bool, str) # success, message
+    log      = pyqtSignal(str, str)    # message, color
+    progress = pyqtSignal(int, int, str)  # current, total, plan_name
+    finished = pyqtSignal(bool, str)   # success, message
 
     def __init__(self, uid: int, cookie: str, out_dir: Path):
         super().__init__()
-        self.uid     = uid
-        self.cookie  = cookie
-        self.out_dir = out_dir
+        self.uid        = uid
+        self.cookie     = cookie
+        self.out_dir    = out_dir
         self._cancelled = False
 
     def cancel(self):
@@ -102,14 +101,17 @@ class ExportWorker(QThread):
     def _run(self):
         s = self._session()
 
-        # 1. 用户信息
-        self.log.emit("正在获取用户信息…")
+        # 1. 验证 Cookie + 获取用户信息
+        self.log.emit("正在验证账号…", FG_DIM)
         r = self._post(s, "https://www.lianzai365.com/lianzai/PlanCtrl/showHomePage",
                        data={"uid": self.uid, "curPage": 1, "pageSize": 1})
         data = r.json()
         user = data.get("results", {}).get("userInfoDto", {})
-        nickname = user.get("nickName", f"uid_{self.uid}")
-        self.log.emit(f"用户：{nickname}")
+        nickname = user.get("nickName", "")
+        if not nickname:
+            self.finished.emit(False, "Cookie 无效或已过期，请重新复制登录后的 Cookie")
+            return
+        self.log.emit(f"账号验证成功：{nickname}", SUCCESS)
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
         (self.out_dir / "user_info.json").write_text(
@@ -121,49 +123,77 @@ class ExportWorker(QThread):
             self._download_image(s, avatar, self.out_dir / f"avatar.{ext}")
 
         # 2. 连载列表
-        self.log.emit("正在获取连载列表…")
+        self.log.emit("正在获取连载列表…", FG_DIM)
         plans, page = [], 1
         while True:
             r = self._post(s, "https://www.lianzai365.com/lianzai/PlanCtrl/showHomePage",
-                           data={"uid": self.uid, "curPage": page, "pageSize": 20})
+                           data={"uid": self.uid, "curPage": page, "pageSize": 100})
             res = r.json().get("results", {})
             batch = res.get("userPlanDetailDtos", [])
+            page_count = res.get("pageCount", 1)
             plans.extend(batch)
-            if page >= res.get("pageCount", 1) or not batch:
+            if page >= page_count or not batch:
                 break
             page += 1
             time.sleep(0.5)
 
         total = len(plans)
-        self.log.emit(f"共找到 {total} 个连载，开始导出…")
+        self.log.emit(f"共找到 {total} 个连载，开始导出…", FG_DIM)
 
+        skipped = 0
+        failed  = 0
         for i, plan in enumerate(plans):
             if self._cancelled:
                 self.finished.emit(False, "已取消")
                 return
-            self.progress.emit(i, total)
-            self._save_plan(s, plan, user)
+            title = plan.get("goal", f"连载_{plan.get('planId')}")
+            self.progress.emit(i, total, title)
+            try:
+                did_skip = self._save_plan(s, plan, user)
+                if did_skip:
+                    skipped += 1
+            except Exception as e:
+                failed += 1
+                self.log.emit(f"  ⚠️ 「{title}」导出失败：{e}", ERROR)
             time.sleep(0.5)
 
-        self.progress.emit(total, total)
-        self.finished.emit(True, str(self.out_dir))
+        self.progress.emit(total, total, "")
+        summary = f"导出完成！共 {total} 个连载"
+        if skipped:
+            summary += f"，{skipped} 个已是最新（跳过）"
+        if failed:
+            summary += f"，{failed} 个失败"
+        self.finished.emit(True, str(self.out_dir) + "|" + summary)
 
-    def _save_plan(self, s, plan: dict, user: dict):
-        plan_id   = plan.get("planId")
-        plan_uid  = plan.get("uid", self.uid)
-        title     = plan.get("goal", f"连载_{plan_id}")
-        desc      = plan.get("description", "")
-        cover_url = plan.get("cover", "")
+    def _save_plan(self, s, plan: dict, user: dict) -> bool:
+        """返回 True 表示跳过（增量）"""
+        plan_id    = plan.get("planId")
+        plan_uid   = plan.get("uid", self.uid)
+        title      = plan.get("goal", f"连载_{plan_id}")
+        desc       = plan.get("description", "")
+        cover_url  = plan.get("cover", "")
         is_private = plan.get("privacy", 0)
-        created   = self._ts(plan.get("createdTs", 0))
+        created    = self._ts(plan.get("createdTs", 0))
+        updated_ts = plan.get("updatedTs", 0)
 
         plan_dir = self.out_dir / self._safe_name(title)
         plan_dir.mkdir(exist_ok=True)
         img_dir = plan_dir / "images"
         img_dir.mkdir(exist_ok=True)
 
+        # 增量检查：raw.json 存在且 updatedTs 没变则跳过
+        raw_path = plan_dir / "raw.json"
+        if raw_path.exists():
+            try:
+                existing = json.loads(raw_path.read_text(encoding="utf-8"))
+                if existing.get("plan_info", {}).get("updatedTs") == updated_ts and updated_ts:
+                    self.log.emit(f"  ✓ 「{title}」已是最新，跳过", FG_DIM)
+                    return True
+            except Exception:
+                pass
+
         lock = "🔒 " if is_private else ""
-        self.log.emit(f"  {lock}{title}")
+        self.log.emit(f"  {lock}「{title}」", FG)
 
         if cover_url:
             tail = cover_url.split("|")[0].rstrip("/").split("/")[-1]
@@ -185,12 +215,7 @@ class ExportWorker(QThread):
             page += 1
             time.sleep(0.3)
 
-        # 保存原始数据
-        (plan_dir / "raw.json").write_text(
-            json.dumps({"plan_info": plan, "user_info": user, "stages": stages},
-                       ensure_ascii=False, indent=2), encoding="utf-8")
-
-        # 生成 Markdown
+        # 生成 Markdown + 抓评论
         md = [f"# {title}\n"]
         if desc:
             md.append(f"> {desc}\n")
@@ -198,11 +223,11 @@ class ExportWorker(QThread):
         md.append("---\n")
 
         for i, stage in enumerate(stages, 1):
-            stage_id  = stage.get("stageId", i)
-            html_text = stage.get("html", "").strip()
-            img_field = stage.get("img", "")
-            pub_time  = self._ts(stage.get("publishTs", 0))
-            praise    = stage.get("praiseCount", 0)
+            stage_id      = stage.get("stageId", i)
+            html_text     = stage.get("html", "").strip()
+            img_field     = stage.get("img", "")
+            pub_time      = self._ts(stage.get("publishTs", 0))
+            praise        = stage.get("praiseCount", 0)
             comment_count = stage.get("commentCount", 0)
 
             clean = re.sub(r"<[^>]+>", "", html_text).strip()
@@ -226,12 +251,12 @@ class ExportWorker(QThread):
             if praise or comment_count:
                 md.append(f"*❤️ {praise}  💬 {comment_count}*\n")
 
-            # 评论
+            stage_comments = []
             if comment_count:
-                comments = self._fetch_comments(s, plan_id, stage_id)
-                if comments:
+                stage_comments = self._fetch_comments(s, plan_id, stage_id)
+                if stage_comments:
                     md.append("\n**评论：**\n")
-                    for c in comments:
+                    for c in stage_comments:
                         author  = c.get("commentAuthorNick", "匿名")
                         content = re.sub(r"<[^>]+>", "", c.get("comment", "")).strip()
                         ctime   = c.get("createdTsStr", self._ts(c.get("createdTs", 0)))
@@ -240,11 +265,16 @@ class ExportWorker(QThread):
                             md.append(f"> **{author}** 回复 **{reply}**（{ctime}）：{content}\n")
                         else:
                             md.append(f"> **{author}**（{ctime}）：{content}\n")
+            stage["comments"] = stage_comments
 
             md.append("\n---\n")
             time.sleep(0.2)
 
         (plan_dir / "content.md").write_text("\n".join(md), encoding="utf-8")
+        (plan_dir / "raw.json").write_text(
+            json.dumps({"plan_info": plan, "user_info": user, "stages": stages},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+        return False
 
     def _fetch_comments(self, s, plan_id, stage_id) -> list:
         comments, page = [], 1
@@ -277,10 +307,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("轻想连载 · 数据导出")
-        self.setFixedSize(560, 720)
-        self._worker = None
-        self._out_dir = Path.home() / "Downloads" / "lianzai_backup"
+        self.setFixedSize(560, 780)
+        self._worker   = None
+        self._settings = QSettings("lianzai", "exporter")
+        self._out_dir  = Path(self._settings.value(
+            "out_dir", str(Path.home() / "Downloads" / "lianzai_backup")))
         self._build_ui()
+        self._restore_settings()
 
     def _build_ui(self):
         self.setStyleSheet(f"""
@@ -328,7 +361,6 @@ class MainWindow(QMainWindow):
         root.addWidget(title)
         root.addWidget(sub)
 
-        # 分隔线
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
         line.setStyleSheet(f"color: {BORDER};")
@@ -340,17 +372,22 @@ class MainWindow(QMainWindow):
         self._uid_edit.setFixedHeight(38)
         root.addWidget(self._uid_edit)
 
-        # Cookie
-        root.addWidget(self._label("Cookie（含私密内容必填，仅公开内容可留空）"))
-        self._cookie_edit = QTextEdit()
-        self._cookie_edit.setPlaceholderText(
-            "浏览器登录后，按 F12 → Application（或 Storage）→ Cookies\n"
-            "复制 PLAY_SESSION 和 rememberme 的值，粘贴到这里\n\n"
-            "格式示例：\n"
-            "PLAY_SESSION=\"xxx\"; rememberme=\"xxx\""
-        )
-        self._cookie_edit.setFixedHeight(130)
-        root.addWidget(self._cookie_edit)
+        # Cookie（分两行，更清晰）
+        cookie_hint = QLabel("含私密内容必填 · F12 → Application → Cookies → www.lianzai365.com")
+        cookie_hint.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+        root.addWidget(cookie_hint)
+
+        self._play_session_edit = QLineEdit()
+        self._play_session_edit.setPlaceholderText("PLAY_SESSION 的值（点击该行后在下方 Cookie Value 复制）")
+        self._play_session_edit.setFixedHeight(38)
+        root.addWidget(self._label("PLAY_SESSION"))
+        root.addWidget(self._play_session_edit)
+
+        self._rememberme_edit = QLineEdit()
+        self._rememberme_edit.setPlaceholderText("rememberme 的值")
+        self._rememberme_edit.setFixedHeight(38)
+        root.addWidget(self._label("rememberme"))
+        root.addWidget(self._rememberme_edit)
 
         # 保存路径
         root.addWidget(self._label("保存位置"))
@@ -369,30 +406,27 @@ class MainWindow(QMainWindow):
         # 开始/取消按钮
         self._start_btn = QPushButton("开始导出")
         self._start_btn.setFixedHeight(42)
-        self._start_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {ACCENT}; color: white;
-                border: none; border-radius: 6px;
-                font-size: 14px; font-weight: bold;
-            }}
-            QPushButton:hover {{ background: #4e9860; }}
-            QPushButton:disabled {{ background: {BG_BTN}; color: {FG_DIM}; }}
-        """)
+        self._start_btn.setStyleSheet(self._accent_btn_style())
         self._start_btn.clicked.connect(self._start)
         root.addWidget(self._start_btn)
 
-        # 进度条
+        # 进度条 + 当前连载名
         self._progress = QProgressBar()
         self._progress.setFixedHeight(6)
         self._progress.setTextVisible(False)
         self._progress.setValue(0)
         root.addWidget(self._progress)
 
+        self._progress_lbl = QLabel("")
+        self._progress_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
+        self._progress_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(self._progress_lbl)
+
         # 日志
         self._log = QTextEdit()
         self._log.setReadOnly(True)
         self._log.setPlaceholderText("导出日志将显示在这里…")
-        self._log.setFont(QFont("Menlo, Consolas, monospace", 12))
+        self._log.setFont(QFont("Menlo", 12))
         self._log.setStyleSheet(f"""
             QTextEdit {{
                 background: {BG_INPUT}; color: {FG_DIM};
@@ -402,43 +436,91 @@ class MainWindow(QMainWindow):
         """)
         root.addWidget(self._log, 1)
 
-        # 底部提示
-        hint = QLabel("导出的数据保存为 Markdown 文件 + 图片，可用任意文本编辑器查看")
+        # 底部按钮行
+        bottom = QHBoxLayout()
+        hint = QLabel("导出完成后可直接在轻想纪念版中查看")
         hint.setStyleSheet(f"color: {FG_DIM}; font-size: 11px;")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        root.addWidget(hint)
+        bottom.addWidget(hint)
+        bottom.addStretch()
+        self._open_reader_btn = QPushButton("打开轻想纪念版")
+        self._open_reader_btn.setFixedHeight(30)
+        self._open_reader_btn.setVisible(False)
+        self._open_reader_btn.clicked.connect(self._open_reader)
+        bottom.addWidget(self._open_reader_btn)
+        root.addLayout(bottom)
+
+    def _accent_btn_style(self, cancel=False):
+        if cancel:
+            return f"""
+                QPushButton {{
+                    background: #e0e0e0; color: {FG};
+                    border: none; border-radius: 6px;
+                    font-size: 14px; font-weight: bold;
+                }}
+                QPushButton:hover {{ background: #d0d0d0; }}
+            """
+        return f"""
+            QPushButton {{
+                background: {ACCENT}; color: white;
+                border: none; border-radius: 6px;
+                font-size: 14px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: #4e9860; }}
+            QPushButton:disabled {{ background: {BG_BTN}; color: {FG_DIM}; }}
+        """
 
     def _label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
         return lbl
 
+    def _restore_settings(self):
+        uid = self._settings.value("uid", "")
+        if uid:
+            self._uid_edit.setText(uid)
+
+    def _save_settings(self):
+        self._settings.setValue("uid", self._uid_edit.text().strip())
+        self._settings.setValue("out_dir", str(self._out_dir))
+
     def _browse(self):
         path = QFileDialog.getExistingDirectory(self, "选择保存位置", str(self._out_dir))
         if path:
             self._out_dir = Path(path)
             self._path_edit.setText(path)
+            self._save_settings()
 
     def _start(self):
         if self._worker and self._worker.isRunning():
             self._worker.cancel()
             self._start_btn.setText("开始导出")
-            self._start_btn.setStyleSheet(self._start_btn.styleSheet())
+            self._start_btn.setStyleSheet(self._accent_btn_style())
             return
 
         uid_text = self._uid_edit.text().strip()
         if not uid_text.isdigit():
-            self._append_log("⚠️  请输入正确的 UID（纯数字）", ERROR)
+            self._append_log("⚠️  请输入正确的轻想号（纯数字）", ERROR)
             return
 
+        self._save_settings()
         uid = int(uid_text)
-        cookie = self._cookie_edit.toPlainText().strip()
+        ps  = self._play_session_edit.text().strip().strip('"')
+        rm  = self._rememberme_edit.text().strip().strip('"')
+        cookie = ""
+        if ps:
+            cookie += f'PLAY_SESSION="{ps}"'
+        if rm:
+            cookie += f'; rememberme="{rm}"' if cookie else f'rememberme="{rm}"'
         out_dir = Path(self._path_edit.text()) / f"lianzai_{uid}"
 
         self._log.clear()
         self._progress.setValue(0)
         self._progress.setMaximum(100)
+        self._progress_lbl.setText("")
+        self._open_reader_btn.setVisible(False)
         self._start_btn.setText("取消")
+        self._start_btn.setStyleSheet(self._accent_btn_style(cancel=True))
+        self._last_out_dir = out_dir
 
         self._worker = ExportWorker(uid, cookie, out_dir)
         self._worker.log.connect(self._append_log)
@@ -449,19 +531,31 @@ class MainWindow(QMainWindow):
     def _append_log(self, msg: str, color: str = FG_DIM):
         self._log.append(f'<span style="color:{color};">{msg}</span>')
 
-    def _on_progress(self, cur: int, total: int):
+    def _on_progress(self, cur: int, total: int, plan_name: str):
         if total > 0:
             self._progress.setMaximum(total)
             self._progress.setValue(cur)
+            if plan_name:
+                self._progress_lbl.setText(f"{cur + 1} / {total}  {plan_name}")
 
     def _on_finished(self, success: bool, msg: str):
         self._start_btn.setText("开始导出")
+        self._start_btn.setStyleSheet(self._accent_btn_style())
+        self._progress_lbl.setText("")
         if success:
-            self._append_log(f"\n✅ 导出完成！", SUCCESS)
-            self._append_log(f"保存位置：{msg}", SUCCESS)
+            out_dir, summary = msg.split("|", 1)
+            self._append_log(f"\n✅ {summary}", SUCCESS)
+            self._append_log(f"保存位置：{out_dir}", SUCCESS)
             self._progress.setValue(self._progress.maximum())
+            self._open_reader_btn.setVisible(True)
         else:
-            self._append_log(f"\n❌ 出错：{msg}", ERROR)
+            self._append_log(f"\n❌ {msg}", ERROR)
+
+    def _open_reader(self):
+        reader_path = Path(__file__).parent / "reader.py"
+        if reader_path.exists():
+            import subprocess
+            subprocess.Popen([sys.executable, str(reader_path)])
 
 
 if __name__ == "__main__":
