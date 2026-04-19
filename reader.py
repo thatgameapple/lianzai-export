@@ -1035,7 +1035,7 @@ class MainWindow(QMainWindow):
                 raw = json.loads((d / "raw.json").read_text(encoding="utf-8"))
                 plan = raw.get("plan_info", {})
                 stages = raw.get("stages", [])
-                finished = plan.get("planStatus", plan.get("status", 0)) in (2, "COMPLETE", "FINISHED")
+                finished = bool(plan.get("isFinish", plan.get("planStatus", plan.get("status", 0)) in (2, "COMPLETE", "FINISHED")))
                 self._plan_metas.append({
                     "title": plan.get("goal", d.name),
                     "count": len(stages),
