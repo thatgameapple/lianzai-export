@@ -63,8 +63,6 @@ def circular_pixmap(path: Path, size: int) -> QPixmap:
 # ── 用户横幅 ──────────────────────────────────────────────────────────────
 
 class BannerWidget(QWidget):
-    random_clicked  = pyqtSignal()   # 随机回忆
-    today_clicked   = pyqtSignal()   # 那年今日
 
     def __init__(self, user_info: dict, backup_dir: Path):
         super().__init__()
@@ -147,32 +145,6 @@ class BannerWidget(QWidget):
 
 
         layout.addWidget(center, 1)
-
-        # 底部栏：右侧随机回忆/那年今日
-        bottom = QWidget()
-        bottom.setFixedHeight(32)
-        bottom.setStyleSheet("background: transparent;")
-        bottom_l = QHBoxLayout(bottom)
-        bottom_l.setContentsMargins(0, 0, 16, 8)
-        bottom_l.setSpacing(0)
-        bottom_l.addStretch()
-
-        for label, sig_name in [("随机回忆", self.random_clicked), ("那年今日", self.today_clicked)]:
-            btn = QPushButton(label)
-            btn.setFixedHeight(24)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: transparent; border: none;
-                    color: rgba(255,255,255,0.7); font-size: 12px;
-                    padding: 0 8px;
-                }
-                QPushButton:hover { color: white; }
-            """)
-            btn.clicked.connect(sig_name)
-            bottom_l.addWidget(btn)
-
-        layout.addWidget(bottom)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -500,8 +472,6 @@ class HomeView(QWidget):
 
         # 横幅
         banner = BannerWidget(user_info, backup_dir)
-        banner.random_clicked.connect(self._show_random)
-        banner.today_clicked.connect(self._show_on_this_day)
         root.addWidget(banner)
 
 
@@ -545,6 +515,22 @@ class HomeView(QWidget):
         tab_l.addWidget(self._tab_ongoing)
         tab_l.addWidget(self._tab_finished)
         tab_l.addStretch()
+
+        # 右侧：随机回忆 / 那年今日
+        for label, slot in [("随机回忆", self._show_random), ("那年今日", self._show_on_this_day)]:
+            mb = QPushButton(label)
+            mb.setFixedHeight(28)
+            mb.setCursor(Qt.CursorShape.PointingHandCursor)
+            mb.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; border: none;
+                    color: {FG_DIM}; font-size: 13px; padding: 0 8px;
+                }}
+                QPushButton:hover {{ color: {ACCENT}; }}
+            """)
+            mb.clicked.connect(slot)
+            tab_l.addWidget(mb)
+
         right_l.addWidget(tab_bar)
 
         # 网格区（stacked）
