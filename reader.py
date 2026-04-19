@@ -364,7 +364,7 @@ class PlanGrid(QScrollArea):
             card.clicked.connect(lambda idx=i: self.plan_selected.emit(idx))
             grid.addWidget(card, row, col)
             col += 1
-            if col >= 4:
+            if col >= 3:
                 col = 0
                 row += 1
 
