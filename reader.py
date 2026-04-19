@@ -1,0 +1,927 @@
+"""
+轻想纪念版 · 本地阅读器
+"""
+import sys, json, re
+from pathlib import Path
+from datetime import datetime
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QScrollArea, QFrame, QFileDialog,
+    QGridLayout, QSizePolicy, QStackedWidget, QTabBar
+)
+from PyQt6.QtCore import Qt, QSize, QUrl, pyqtSignal, QPoint, QRectF
+from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+from PyQt6.QtGui import (
+    QFont, QPixmap, QPainter, QPainterPath, QColor,
+    QLinearGradient, QBrush, QPen, QBitmap, QRegion
+)
+
+# ── 主题 ──────────────────────────────────────────────────────────────────
+
+BG       = "#f5f5f5"
+BG_WHITE = "#ffffff"
+ACCENT   = "#5aab6e"
+FG       = "#333333"
+FG_DIM   = "#999999"
+FG_LIGHT = "#cccccc"
+BORDER   = "#e8e8e8"
+SIDEBAR_W = 260
+
+
+def ts_to_str(ts, fmt="%Y-%m-%d %H:%M:%S") -> str:
+    try:
+        return datetime.fromtimestamp(int(ts) / 1000).strftime(fmt)
+    except Exception:
+        return ""
+
+
+def circular_pixmap(path: Path, size: int) -> QPixmap:
+    src = QPixmap(str(path))
+    if src.isNull():
+        pix = QPixmap(size, size)
+        pix.fill(QColor("#dddddd"))
+        return pix
+    src = src.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                     Qt.TransformationMode.SmoothTransformation)
+    # center crop
+    x = (src.width() - size) // 2
+    y = (src.height() - size) // 2
+    src = src.copy(x, y, size, size)
+    result = QPixmap(size, size)
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path_obj = QPainterPath()
+    path_obj.addEllipse(0, 0, size, size)
+    painter.setClipPath(path_obj)
+    painter.drawPixmap(0, 0, src)
+    painter.end()
+    return result
+
+
+# ── 用户横幅 ──────────────────────────────────────────────────────────────
+
+class BannerWidget(QWidget):
+    def __init__(self, user_info: dict, backup_dir: Path):
+        super().__init__()
+        self.setFixedHeight(260)
+        self._bg_pix = None
+
+        avatar_files = list(backup_dir.glob("avatar.*"))
+        if avatar_files:
+            pix = QPixmap(str(avatar_files[0]))
+            if not pix.isNull():
+                self._bg_pix = pix.scaled(
+                    1200, 260,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 24, 0, 20)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 头像
+        avatar_lbl = QLabel()
+        avatar_lbl.setFixedSize(70, 70)
+        avatar_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        avatar_lbl.setStyleSheet("background: transparent;")
+        if avatar_files:
+            avatar_lbl.setPixmap(circular_pixmap(avatar_files[0], 70))
+
+        # 昵称
+        name = QLabel(user_info.get("nickName", ""))
+        name.setFont(QFont("PingFang SC", 17, QFont.Weight.Bold))
+        name.setStyleSheet("color: white; background: transparent;")
+        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 签名
+        sig = user_info.get("signature", user_info.get("bio", ""))
+        sig_lbl = QLabel(sig[:50] if sig else "")
+        sig_lbl.setStyleSheet("color: rgba(255,255,255,0.8); font-size: 13px; background: transparent;")
+        sig_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 统计（关注 / 粉丝 / 见证）
+        stats_w = QWidget()
+        stats_w.setStyleSheet("background: transparent;")
+        stats_l = QHBoxLayout(stats_w)
+        stats_l.setContentsMargins(0, 4, 0, 0)
+        stats_l.setSpacing(0)
+        stats_l.addStretch()
+        for val, lbl in [
+            (user_info.get("followCount", 0), "关注"),
+            (user_info.get("fanCount", user_info.get("fansCount", 0)), "粉丝"),
+            (user_info.get("witnessCount", 0), "见证"),
+        ]:
+            col = QWidget()
+            col.setStyleSheet("background: transparent;")
+            col_l = QVBoxLayout(col)
+            col_l.setSpacing(1)
+            col_l.setContentsMargins(24, 0, 24, 0)
+            v = QLabel(str(val or 0))
+            v.setFont(QFont("PingFang SC", 14, QFont.Weight.Bold))
+            v.setStyleSheet("color: white; background: transparent;")
+            v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            t = QLabel(lbl)
+            t.setStyleSheet("color: rgba(255,255,255,0.7); font-size: 11px; background: transparent;")
+            t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            col_l.addWidget(v)
+            col_l.addWidget(t)
+            stats_l.addWidget(col)
+        stats_l.addStretch()
+
+        layout.addWidget(avatar_lbl, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(name)
+        if sig:
+            layout.addWidget(sig_lbl)
+        layout.addWidget(stats_w)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self._bg_pix:
+            x = (self._bg_pix.width() - self.width()) // 2
+            painter.drawPixmap(0, 0, self._bg_pix, x, 0, self.width(), self.height())
+        else:
+            grad = QLinearGradient(0, 0, self.width(), self.height())
+            grad.setColorAt(0, QColor("#3a7a50"))
+            grad.setColorAt(1, QColor("#5aab6e"))
+            painter.fillRect(self.rect(), grad)
+        # 半透明遮罩
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 80))
+        painter.end()
+        super().paintEvent(event)
+
+
+# ── 左侧栏 ────────────────────────────────────────────────────────────────
+
+class SidebarWidget(QWidget):
+    plan_clicked = pyqtSignal(int)  # plan index
+
+    def __init__(self, user_info: dict, plan_dirs: list, plan_metas: list):
+        super().__init__()
+        self.setFixedWidth(SIDEBAR_W)
+        self.setStyleSheet(f"background: {BG_WHITE}; border-right: 1px solid {BORDER};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # 统计
+        stats_w = QWidget()
+        stats_w.setStyleSheet(f"background: {BG_WHITE}; border-bottom: 1px solid {BORDER};")
+        stats_l = QHBoxLayout(stats_w)
+        stats_l.setContentsMargins(0, 14, 0, 14)
+
+        for val, lbl in [
+            (user_info.get("followCount", 0), "关注"),
+            (user_info.get("fanCount", user_info.get("fansCount", 0)), "粉丝"),
+            (user_info.get("witnessCount", 0), "见证"),
+        ]:
+            col = QWidget()
+            col_l = QVBoxLayout(col)
+            col_l.setSpacing(2)
+            col_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            v = QLabel(str(val or 0))
+            v.setFont(QFont("PingFang SC", 15, QFont.Weight.Bold))
+            v.setStyleSheet(f"color: {FG};")
+            v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            t = QLabel(lbl)
+            t.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+            t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            col_l.addWidget(v)
+            col_l.addWidget(t)
+            stats_l.addWidget(col)
+
+        root.addWidget(stats_w)
+
+        # 连载列表（滚动）
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background: {BG_WHITE}; }}
+            QScrollBar:vertical {{ background: transparent; width: 4px; }}
+            QScrollBar::handle:vertical {{ background: #cccccc; border-radius: 2px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+        container = QWidget()
+        container.setStyleSheet(f"background: {BG_WHITE};")
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 8, 0, 8)
+        vbox.setSpacing(0)
+
+        for i, (d, meta) in enumerate(zip(plan_dirs, plan_metas)):
+            btn = QPushButton(meta["title"])
+            btn.setFixedHeight(40)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; color: {FG};
+                    border: none; border-bottom: 1px solid {BORDER};
+                    text-align: left; padding: 0 16px;
+                    font-size: 13px;
+                }}
+                QPushButton:hover {{ background: #f0f8f2; color: {ACCENT}; }}
+            """)
+            btn.clicked.connect(lambda _, idx=i: self.plan_clicked.emit(idx))
+            vbox.addWidget(btn)
+
+        vbox.addStretch()
+        scroll.setWidget(container)
+        root.addWidget(scroll)
+
+
+# ── 连载封面卡片 ──────────────────────────────────────────────────────────
+
+class PlanCard(QWidget):
+    clicked = pyqtSignal()
+
+    CARD_W = 180
+    CARD_H = 220
+    IMG_H  = 156
+    RADIUS = 8
+    BW     = 2
+
+    def __init__(self, meta: dict, plan_dir: Path):
+        super().__init__()
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(self.CARD_W, self.CARD_H)
+        self._hovered = False
+        self._title   = meta["title"]
+        self._cover   = None
+
+        img_dir = plan_dir / "images"
+        covers  = list(img_dir.glob("cover.*")) if img_dir.exists() else []
+        if covers:
+            pix = QPixmap(str(covers[0]))
+            if not pix.isNull():
+                pix = pix.scaled(
+                    self.CARD_W, self.IMG_H,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+                x = (pix.width()  - self.CARD_W) // 2
+                y = (pix.height() - self.IMG_H)  // 2
+                self._cover = pix.copy(x, y, self.CARD_W, self.IMG_H)
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        self.clicked.emit()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        bw = self.BW
+        r  = self.RADIUS
+        w, h = self.CARD_W, self.CARD_H
+
+        # 完整圆角路径（用于裁切）
+        full_rect = QRectF(bw/2, bw/2, w - bw, h - bw)
+        full_path = QPainterPath()
+        full_path.addRoundedRect(full_rect, r, r)
+
+        # 1. 裁切到圆角，防止图片溢出
+        p.setClipPath(full_path)
+
+        # 2. 画封面图（或灰色占位）
+        if self._cover:
+            p.drawPixmap(0, 0, self._cover)
+        else:
+            p.fillRect(0, 0, w, self.IMG_H, QColor("#eeeeee"))
+
+        # 3. 白色底部区域
+        p.fillRect(0, self.IMG_H, w, h - self.IMG_H, QColor(BG_WHITE))
+
+        # 4. 标题文字
+        p.setClipping(False)
+        p.setPen(QColor(FG))
+        p.setFont(QFont("PingFang SC", 12))
+        text_rect = QRectF(8, self.IMG_H + 4, w - 16, h - self.IMG_H - 8)
+        p.drawText(text_rect,
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter |
+                   Qt.TextFlag.TextWordWrap,
+                   self._title)
+
+        # 5. 边框（hover 绿色，否则淡灰）—— 画在最上层
+        border_color = QColor(ACCENT) if self._hovered else QColor(BORDER)
+        pen = QPen(border_color, bw)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(full_path)
+
+        p.end()
+
+
+# ── 连载网格（主页右侧）─────────────────────────────────────────────────
+
+class PlanGrid(QScrollArea):
+    plan_selected = pyqtSignal(int)
+
+    def __init__(self, plan_dirs: list, plan_metas: list, filter_finished=False):
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setStyleSheet(f"""
+            QScrollArea {{ border: none; background: {BG}; }}
+            QScrollBar:vertical {{ background: transparent; width: 4px; }}
+            QScrollBar::handle:vertical {{ background: #cccccc; border-radius: 2px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+
+        container = QWidget()
+        container.setStyleSheet(f"background: {BG};")
+        grid = QGridLayout(container)
+        grid.setContentsMargins(24, 32, 24, 24)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(28)
+
+        col = 0
+        row = 0
+        for i, (d, meta) in enumerate(zip(plan_dirs, plan_metas)):
+            finished = meta.get("finished", False)
+            if filter_finished and not finished:
+                continue
+            if not filter_finished and finished:
+                continue
+            card = PlanCard(meta, d)
+            card.clicked.connect(lambda idx=i: self.plan_selected.emit(idx))
+            grid.addWidget(card, row, col)
+            col += 1
+            if col >= 4:
+                col = 0
+                row += 1
+
+        grid.setRowStretch(row + 1, 1)
+        self.setWidget(container)
+
+
+# ── 主页 ──────────────────────────────────────────────────────────────────
+
+class HomeView(QWidget):
+    plan_selected = pyqtSignal(int)
+
+    def __init__(self, user_info: dict, plan_dirs: list, plan_metas: list, backup_dir: Path):
+        super().__init__()
+        self.setStyleSheet(f"background: {BG};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # 横幅
+        banner = BannerWidget(user_info, backup_dir)
+        root.addWidget(banner)
+
+        # 内容区（全宽，无侧边栏）
+        content = QHBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(0)
+
+        right = QWidget()
+        right.setStyleSheet(f"background: {BG};")
+        right_l = QVBoxLayout(right)
+        right_l.setContentsMargins(0, 0, 0, 0)
+        right_l.setSpacing(0)
+
+        # Tab 栏
+        tab_bar = QWidget()
+        tab_bar.setFixedHeight(48)
+        tab_bar.setStyleSheet(f"background: {BG_WHITE}; border-bottom: 1px solid {BORDER};")
+        tab_l = QHBoxLayout(tab_bar)
+        tab_l.setContentsMargins(24, 0, 24, 0)
+        tab_l.setSpacing(32)
+
+        ongoing = [m for m in plan_metas if not m.get("finished")]
+        finished = [m for m in plan_metas if m.get("finished")]
+
+        self._tab_ongoing = QPushButton(f"进行中  {len(ongoing)}")
+        self._tab_finished = QPushButton(f"已完结  {len(finished)}")
+        for btn in [self._tab_ongoing, self._tab_finished]:
+            btn.setFixedHeight(48)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent; border: none;
+                    color: {FG_DIM}; font-size: 14px;
+                }}
+                QPushButton:hover {{ color: {ACCENT}; }}
+            """)
+        self._tab_ongoing.setStyleSheet(self._tab_ongoing.styleSheet().replace(
+            f"color: {FG_DIM}", f"color: {ACCENT}; font-weight: bold; border-bottom: 2px solid {ACCENT}"
+        ))
+
+        tab_l.addWidget(self._tab_ongoing)
+        tab_l.addWidget(self._tab_finished)
+        tab_l.addStretch()
+        right_l.addWidget(tab_bar)
+
+        # 网格区（stacked）
+        self._grid_stack = QStackedWidget()
+        self._grid_ongoing = PlanGrid(plan_dirs, plan_metas, filter_finished=False)
+        self._grid_ongoing.plan_selected.connect(self.plan_selected)
+        self._grid_finished = PlanGrid(plan_dirs, plan_metas, filter_finished=True)
+        self._grid_finished.plan_selected.connect(self.plan_selected)
+        self._grid_stack.addWidget(self._grid_ongoing)
+        self._grid_stack.addWidget(self._grid_finished)
+        right_l.addWidget(self._grid_stack)
+
+        self._tab_ongoing.clicked.connect(lambda: self._switch_tab(0))
+        self._tab_finished.clicked.connect(lambda: self._switch_tab(1))
+
+        content.addWidget(right)
+        content_w = QWidget()
+        content_w.setLayout(content)
+        root.addWidget(content_w, 1)
+
+    def _switch_tab(self, idx):
+        self._grid_stack.setCurrentIndex(idx)
+        btns = [self._tab_ongoing, self._tab_finished]
+        for i, btn in enumerate(btns):
+            if i == idx:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: transparent; border: none; border-bottom: 2px solid {ACCENT};
+                        color: {ACCENT}; font-size: 14px; font-weight: bold;
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: transparent; border: none;
+                        color: {FG_DIM}; font-size: 14px;
+                    }}
+                    QPushButton:hover {{ color: {ACCENT}; }}
+                """)
+
+
+# ── 封面英雄横幅 ─────────────────────────────────────────────────────────
+
+class HeroCoverWidget(QWidget):
+    """全宽封面图，底部叠加渐变+标题+副标题"""
+    HERO_H = 280
+
+    def __init__(self, cover_path: Path | None, title: str, subtitle: str):
+        super().__init__()
+        self.setFixedHeight(self.HERO_H)
+        self._title    = title
+        self._subtitle = subtitle
+        self._cover    = None
+        if cover_path and cover_path.exists():
+            pix = QPixmap(str(cover_path))
+            if not pix.isNull():
+                self._cover = pix
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # 1. 背景：封面图或纯绿渐变
+        if self._cover:
+            scaled = self._cover.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            x = (scaled.width()  - w) // 2
+            y = (scaled.height() - h) // 2
+            p.drawPixmap(0, 0, scaled, x, y, w, h)
+        else:
+            grad = QLinearGradient(0, 0, w, h)
+            grad.setColorAt(0, QColor("#3a7a50"))
+            grad.setColorAt(1, QColor("#5aab6e"))
+            p.fillRect(0, 0, w, h, grad)
+
+        # 2. 底部渐变遮罩（透明 → 黑）
+        overlay = QLinearGradient(0, h * 0.3, 0, h)
+        overlay.setColorAt(0, QColor(0, 0, 0, 0))
+        overlay.setColorAt(1, QColor(0, 0, 0, 180))
+        p.fillRect(0, 0, w, h, overlay)
+
+        # 3. 标题
+        p.setPen(QColor("white"))
+        title_font = QFont("PingFang SC", 20, QFont.Weight.Bold)
+        p.setFont(title_font)
+        title_rect = QRectF(24, h - 72, w - 48, 36)
+        p.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._title)
+
+        # 4. 副标题
+        p.setPen(QColor(255, 255, 255, 180))
+        sub_font = QFont("PingFang SC", 12)
+        p.setFont(sub_font)
+        sub_rect = QRectF(24, h - 34, w - 48, 22)
+        p.drawText(sub_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._subtitle)
+
+        p.end()
+
+
+# ── 阶段卡片 ──────────────────────────────────────────────────────────────
+
+class StageCard(QWidget):
+    def __init__(self, stage: dict, img_dir: Path, index: int):
+        super().__init__()
+        self.setStyleSheet(f"background: {BG};")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+
+        # ── 左侧：绿色编号列 ──────────────────────────────────────────────
+        left = QWidget()
+        left.setFixedWidth(60)
+        left.setStyleSheet("background: transparent;")
+        left_l = QHBoxLayout(left)
+        left_l.setContentsMargins(0, 16, 4, 0)
+        left_l.setSpacing(2)
+        left_l.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+
+        num_lbl = QLabel(str(index))
+        num_lbl.setFont(QFont("PingFang SC", 15, QFont.Weight.Bold))
+        num_lbl.setStyleSheet(f"color: {ACCENT}; background: transparent;")
+        left_l.addWidget(num_lbl)
+
+        dot_lbl = QLabel("●")
+        dot_lbl.setFont(QFont("PingFang SC", 8))
+        dot_lbl.setStyleSheet(f"color: {ACCENT}; background: transparent;")
+        left_l.addWidget(dot_lbl)
+
+        row.addWidget(left)
+
+        # ── 右侧：内容区 ─────────────────────────────────────────────────
+        right = QWidget()
+        right.setStyleSheet("background: transparent;")
+        right_l = QVBoxLayout(right)
+        right_l.setContentsMargins(8, 12, 16, 20)
+        right_l.setSpacing(8)
+
+        # 日期
+        pub = ts_to_str(stage.get("publishTs", 0))
+        date_lbl = QLabel(pub)
+        date_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 12px;")
+        right_l.addWidget(date_lbl)
+
+        # 内容卡片
+        card = QFrame()
+        card.setStyleSheet(f"""
+            QFrame {{
+                background: {BG_WHITE};
+                border: 1px solid {BORDER};
+                border-radius: 8px;
+            }}
+        """)
+        card_l = QVBoxLayout(card)
+        card_l.setContentsMargins(16, 14, 16, 0)
+        card_l.setSpacing(10)
+
+        # 正文
+        html = stage.get("html", "").strip()
+        text = re.sub(r"<[^>]+>", "", html).strip()
+        if text:
+            text_lbl = QLabel(text)
+            text_lbl.setWordWrap(True)
+            text_lbl.setStyleSheet(f"color: {FG}; font-size: 14px; line-height: 1.6; border: none;")
+            text_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            card_l.addWidget(text_lbl)
+
+        # 图片
+        img_field = stage.get("img", "")
+        if img_field:
+            stage_id = stage.get("stageId", "")
+            for entry in img_field.split(","):
+                img_url = entry.split("|")[0].strip()
+                if not img_url:
+                    continue
+                tail = img_url.rstrip("/").split("/")[-1]
+                tail = re.sub(r'[\\:*?"<>|]', '_', tail)
+                img_name = f"stage_{stage_id}_{tail}"
+                if "." not in img_name.split("_")[-1]:
+                    img_name += ".jpg"
+                img_path = img_dir / img_name
+                if img_path.exists():
+                    pix = QPixmap(str(img_path))
+                    if not pix.isNull():
+                        pix = pix.scaledToWidth(480, Qt.TransformationMode.SmoothTransformation)
+                        img_lbl = QLabel()
+                        img_lbl.setPixmap(pix)
+                        img_lbl.setStyleSheet("border: none;")
+                        card_l.addWidget(img_lbl)
+
+        # 底部统计行（推荐 | 评论 | 点赞）三等分
+        praise        = stage.get("praiseCount", 0)
+        recommend     = stage.get("recommendCount", 0)
+        comment_count = stage.get("commentCount", 0)
+
+        stats_bar = QWidget()
+        stats_bar.setFixedHeight(40)
+        stats_bar.setStyleSheet(f"border: none; border-top: 1px solid {BORDER};")
+        stats_l = QHBoxLayout(stats_bar)
+        stats_l.setContentsMargins(0, 0, 0, 0)
+        stats_l.setSpacing(0)
+
+        for i, (icon, val) in enumerate([("推荐", recommend), ("评论", comment_count), ("👍", praise)]):
+            cell = QLabel(f"{icon}  {val}")
+            cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cell.setStyleSheet(f"color: {FG_DIM}; font-size: 12px; border: none;")
+            stats_l.addWidget(cell, 1)
+            if i < 2:
+                div = QFrame()
+                div.setFrameShape(QFrame.Shape.VLine)
+                div.setStyleSheet(f"color: {BORDER};")
+                stats_l.addWidget(div)
+
+        card_l.addWidget(stats_bar)
+
+        # 评论列表
+        comments = stage.get("comments", [])
+        if comments:
+            sep = QFrame()
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setStyleSheet(f"color: {BORDER};")
+            card_l.addWidget(sep)
+            for c in comments:
+                author  = c.get("commentAuthorNick", "匿名")
+                content = re.sub(r"<[^>]+>", "", c.get("comment", "")).strip()
+                ctime   = c.get("createdTsStr", "")
+                reply   = c.get("commentParentNick", "")
+                if reply and c.get("commentParentId"):
+                    txt = f"<b>{author}</b> 回复 <b>{reply}</b>  <span style='color:{FG_DIM};font-size:11px;'>{ctime}</span><br>{content}"
+                else:
+                    txt = f"<b>{author}</b>  <span style='color:{FG_DIM};font-size:11px;'>{ctime}</span><br>{content}"
+                c_lbl = QLabel(txt)
+                c_lbl.setWordWrap(True)
+                c_lbl.setStyleSheet(f"color: {FG}; font-size: 12px; border: none; padding: 4px 0;")
+                c_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                card_l.addWidget(c_lbl)
+
+        card_l.addSpacing(4)
+        right_l.addWidget(card)
+        row.addWidget(right, 1)
+
+
+# ── 连载详情页 ────────────────────────────────────────────────────────────
+
+class PlanDetailView(QWidget):
+    back = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet(f"background: {BG};")
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # 顶栏
+        topbar = QWidget()
+        topbar.setFixedHeight(48)
+        topbar.setStyleSheet(f"background: {BG_WHITE}; border-bottom: 1px solid {BORDER};")
+        top_l = QHBoxLayout(topbar)
+        top_l.setContentsMargins(16, 0, 16, 0)
+
+        back_btn = QPushButton("← 返回")
+        back_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; border: none;
+                color: {ACCENT}; font-size: 14px;
+            }}
+            QPushButton:hover {{ color: #3a7a50; }}
+        """)
+        back_btn.clicked.connect(self.back)
+        top_l.addWidget(back_btn)
+        top_l.addStretch()
+
+        root.addWidget(topbar)
+
+        # 内容滚动区
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setStyleSheet(f"""
+            QScrollArea {{ border: none; background: {BG}; }}
+            QScrollBar:vertical {{ background: transparent; width: 4px; }}
+            QScrollBar::handle:vertical {{ background: #cccccc; border-radius: 2px; min-height: 20px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """)
+        self._container = QWidget()
+        self._container.setStyleSheet(f"background: {BG};")
+        self._layout = QVBoxLayout(self._container)
+        self._layout.setContentsMargins(0, 0, 0, 32)
+        self._layout.setSpacing(0)
+        self._layout.addStretch()
+        self._scroll.setWidget(self._container)
+        root.addWidget(self._scroll)
+
+    def load_plan(self, plan_dir: Path):
+        # 清空
+        while self._layout.count() > 1:
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        raw_path = plan_dir / "raw.json"
+        if not raw_path.exists():
+            return
+        raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        plan   = raw.get("plan_info", {})
+        stages = raw.get("stages", [])
+        img_dir = plan_dir / "images"
+
+        title = plan.get("goal", plan_dir.name)
+
+        # 封面英雄横幅
+        covers = list(img_dir.glob("cover.*")) if img_dir.exists() else []
+        cover_path = covers[0] if covers else None
+
+        witnesses  = plan.get("witnessCount", 0) or 0
+        is_private = bool(plan.get("privacy", 0))
+        subtitle_parts = [f"共 {len(stages)} 篇"]
+        if witnesses:
+            subtitle_parts.append(f"{witnesses} 人见证")
+        if is_private:
+            subtitle_parts.append("私密")
+        subtitle = "  ·  ".join(subtitle_parts)
+
+        hero = HeroCoverWidget(cover_path, title, subtitle)
+        self._layout.insertWidget(self._layout.count() - 1, hero)
+
+        # 统计栏（热度 + 见证）
+        heat = plan.get("heatValue", plan.get("heat", 0)) or 0
+        stats_bar = QWidget()
+        stats_bar.setFixedHeight(44)
+        stats_bar.setStyleSheet(f"background: {BG_WHITE}; border-bottom: 1px solid {BORDER};")
+        stats_l = QHBoxLayout(stats_bar)
+        stats_l.setContentsMargins(20, 0, 20, 0)
+        stats_l.setSpacing(20)
+
+        heat_lbl = QLabel(f"🔥 {heat}")
+        heat_lbl.setStyleSheet(f"color: {FG_DIM}; font-size: 13px;")
+        stats_l.addWidget(heat_lbl)
+
+        if witnesses:
+            wit_lbl = QLabel(f"{witnesses} 人在见证")
+            wit_lbl.setStyleSheet(f"color: {ACCENT}; font-size: 13px; font-weight: bold;")
+            stats_l.addWidget(wit_lbl)
+
+        stats_l.addStretch()
+        self._layout.insertWidget(self._layout.count() - 1, stats_bar)
+
+        # 阶段列表区域（带左边距的容器）
+        stages_container = QWidget()
+        stages_container.setStyleSheet(f"background: {BG};")
+        stages_l = QVBoxLayout(stages_container)
+        stages_l.setContentsMargins(16, 8, 0, 0)
+        stages_l.setSpacing(0)
+
+        stages_sorted = sorted(stages, key=lambda s: s.get("publishTs", 0))
+        total = len(stages_sorted)
+        for i, stage in enumerate(reversed(stages_sorted)):
+            card = StageCard(stage, img_dir, total - i)
+            stages_l.addWidget(card)
+
+        self._layout.insertWidget(self._layout.count() - 1, stages_container)
+        self._scroll.verticalScrollBar().setValue(0)
+
+
+# ── 主窗口 ────────────────────────────────────────────────────────────────
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("轻想纪念版")
+        self.resize(1100, 720)
+        self._backup_dir = None
+        self._plan_dirs = []
+        self._plan_metas = []
+        self.setAcceptDrops(True)
+        self._build_ui()
+
+    def _build_ui(self):
+        self.setStyleSheet(f"QMainWindow {{ background: {BG}; }}")
+
+        self._stack = QStackedWidget()
+        self.setCentralWidget(self._stack)
+
+        # 欢迎页
+        welcome = QWidget()
+        welcome.setStyleSheet(f"background: {BG_WHITE};")
+        wl = QVBoxLayout(welcome)
+        wl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wl.setSpacing(16)
+
+        logo = QLabel("轻想纪念版")
+        logo.setFont(QFont("PingFang SC", 28, QFont.Weight.Bold))
+        logo.setStyleSheet(f"color: {ACCENT};")
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        hint = QLabel("将备份文件夹拖入此处，或点击下方按钮打开")
+        hint.setStyleSheet(f"color: {FG_DIM}; font-size: 14px;")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        open_btn = QPushButton("打开备份文件夹")
+        open_btn.setFixedSize(180, 42)
+        open_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {ACCENT}; color: white;
+                border: none; border-radius: 8px; font-size: 14px;
+            }}
+            QPushButton:hover {{ background: #4e9860; }}
+        """)
+        open_btn.clicked.connect(self._open_folder)
+
+        wl.addWidget(logo)
+        wl.addWidget(hint)
+        wl.addWidget(open_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._stack.addWidget(welcome)
+
+        # 主页和详情页后续动态添加
+        self._home_view = None
+        self._detail_view = PlanDetailView()
+        self._detail_view.back.connect(self._show_home)
+        self._stack.addWidget(self._detail_view)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls and Path(urls[0].toLocalFile()).is_dir():
+                event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            path = Path(urls[0].toLocalFile())
+            if path.is_dir():
+                self._load_backup(path)
+
+    def _open_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "选择备份文件夹")
+        if path:
+            self._load_backup(Path(path))
+
+    def _load_backup(self, backup_dir: Path):
+        self._backup_dir = backup_dir
+
+        # 读用户信息
+        user_info = {}
+        ui_path = backup_dir / "user_info.json"
+        if ui_path.exists():
+            user_info = json.loads(ui_path.read_text(encoding="utf-8"))
+
+        # 读连载列表
+        self._plan_dirs = sorted([
+            d for d in backup_dir.iterdir()
+            if d.is_dir() and (d / "raw.json").exists()
+        ])
+
+        self._plan_metas = []
+        for d in self._plan_dirs:
+            try:
+                raw = json.loads((d / "raw.json").read_text(encoding="utf-8"))
+                plan = raw.get("plan_info", {})
+                stages = raw.get("stages", [])
+                finished = plan.get("planStatus", plan.get("status", 0)) in (2, "COMPLETE", "FINISHED")
+                self._plan_metas.append({
+                    "title": plan.get("goal", d.name),
+                    "count": len(stages),
+                    "finished": finished,
+                    "private": bool(plan.get("privacy", 0)),
+                })
+            except Exception:
+                self._plan_metas.append({"title": d.name, "count": 0, "finished": False})
+
+        # 移除旧主页
+        if self._home_view:
+            self._stack.removeWidget(self._home_view)
+            self._home_view.deleteLater()
+
+        self._home_view = HomeView(user_info, self._plan_dirs, self._plan_metas, backup_dir)
+        self._home_view.plan_selected.connect(self._show_plan)
+        self._stack.insertWidget(1, self._home_view)
+        self._stack.setCurrentWidget(self._home_view)
+
+    def _show_plan(self, idx: int):
+        if 0 <= idx < len(self._plan_dirs):
+            self._detail_view.load_plan(self._plan_dirs[idx])
+            self._stack.setCurrentWidget(self._detail_view)
+
+    def _show_home(self):
+        if self._home_view:
+            self._stack.setCurrentWidget(self._home_view)
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    app.setFont(QFont("PingFang SC", 13))
+    w = MainWindow()
+    w.show()
+    sys.exit(app.exec())
