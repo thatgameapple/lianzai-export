@@ -98,7 +98,7 @@ class BannerWidget(QWidget):
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # 签名
-        sig = user_info.get("signature", user_info.get("bio", ""))
+        sig = user_info.get("sign", user_info.get("signature", user_info.get("bio", "")))
         sig_lbl = QLabel(sig[:50] if sig else "")
         sig_lbl.setStyleSheet("color: rgba(255,255,255,0.8); font-size: 13px; background: transparent;")
         sig_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
