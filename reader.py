@@ -63,7 +63,7 @@ def circular_pixmap(path: Path, size: int) -> QPixmap:
 # ── 用户横幅 ──────────────────────────────────────────────────────────────
 
 class BannerWidget(QWidget):
-    switch_clicked  = pyqtSignal()   # 点左下角胶囊
+    switch_clicked  = pyqtSignal(int, int)  # 昵称标签底部中心全局坐标 (x, y)
     random_clicked  = pyqtSignal()   # 随机回忆
     today_clicked   = pyqtSignal()   # 那年今日
 
@@ -146,9 +146,13 @@ class BannerWidget(QWidget):
             center_l.addWidget(sig_lbl)
         center_l.addWidget(stats_w)
 
-        # 昵称可点击（触发切换）
+        # 昵称可点击（触发切换），传递标签底部中心的全局坐标
+        self._name_lbl = name
         name.setCursor(Qt.CursorShape.PointingHandCursor)
-        name.mousePressEvent = lambda e: self.switch_clicked.emit()
+        def _name_clicked(e, lbl=name):
+            bottom_center = lbl.mapToGlobal(QPoint(lbl.width() // 2, lbl.height()))
+            self.switch_clicked.emit(bottom_center.x(), bottom_center.y())
+        name.mousePressEvent = _name_clicked
 
         layout.addWidget(center, 1)
 
@@ -491,7 +495,7 @@ class MemoryDialog(QDialog):
 
 class HomeView(QWidget):
     plan_selected  = pyqtSignal(int)
-    switch_account = pyqtSignal()
+    switch_account = pyqtSignal(int, int)  # 昵称底部中心全局坐标
 
     def __init__(self, user_info: dict, plan_dirs: list, plan_metas: list, backup_dir: Path):
         super().__init__()
@@ -505,7 +509,7 @@ class HomeView(QWidget):
 
         # 横幅
         banner = BannerWidget(user_info, backup_dir)
-        banner.switch_clicked.connect(self.switch_account)
+        banner.switch_clicked.connect(lambda x, y: self.switch_account.emit(x, y))
         banner.random_clicked.connect(self._show_random)
         banner.today_clicked.connect(self._show_on_this_day)
         root.addWidget(banner)
@@ -1130,8 +1134,8 @@ class MainWindow(QMainWindow):
         if path_str:
             self._load_backup(Path(path_str))
 
-    def _switch_account_menu(self):
-        """弹出账号切换浮层"""
+    def _switch_account_menu(self, anchor_x: int = -1, anchor_y: int = -1):
+        """弹出账号切换浮层，定位在昵称标签正下方"""
         history = self._settings.value("history", [])
         if not isinstance(history, list):
             history = [history] if history else []
@@ -1211,8 +1215,21 @@ class MainWindow(QMainWindow):
         pop_l.addWidget(add_btn)
 
         popup.adjustSize()
-        pos = QCursor.pos()
-        popup.move(pos.x() - popup.width() // 2, pos.y() + 12)
+        # 定位：弹窗顶部中心对齐昵称标签底部中心，向下偏移 8px
+        if anchor_x >= 0 and anchor_y >= 0:
+            x = anchor_x - popup.width() // 2
+            y = anchor_y + 8
+        else:
+            pos = QCursor.pos()
+            x = pos.x() - popup.width() // 2
+            y = pos.y() + 12
+        # 防止超出屏幕右边
+        screen_w = self.screen().geometry().width()
+        if x + popup.width() > screen_w - 8:
+            x = screen_w - popup.width() - 8
+        if x < 8:
+            x = 8
+        popup.move(x, y)
         popup.show()
 
     def _remove_history(self, path: str, popup=None):
