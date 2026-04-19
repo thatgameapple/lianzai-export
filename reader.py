@@ -467,6 +467,26 @@ class HomeView(QWidget):
         banner = BannerWidget(user_info, backup_dir)
         root.addWidget(banner)
 
+        # 随机回忆 / 那年今日（横幅正下方）
+        mem_bar = QWidget()
+        mem_bar.setFixedHeight(36)
+        mem_bar.setStyleSheet(f"background: {BG_WHITE}; border-bottom: 1px solid {BORDER};")
+        mem_l = QHBoxLayout(mem_bar)
+        mem_l.setContentsMargins(0, 0, 0, 0)
+        mem_l.setSpacing(0)
+        mem_l.addStretch()
+        for label, slot in [("随机回忆", self._show_random), ("那年今日", self._show_on_this_day)]:
+            btn = QPushButton(label)
+            btn.setFixedHeight(36)
+            btn.setStyleSheet(f"""
+                QPushButton {{ background: transparent; border: none; border-left: 1px solid {BORDER};
+                               color: {FG_DIM}; font-size: 12px; padding: 0 20px; }}
+                QPushButton:hover {{ color: {ACCENT}; background: #f5fdf7; }}
+            """)
+            btn.clicked.connect(slot)
+            mem_l.addWidget(btn)
+        root.addWidget(mem_bar)
+
         # 内容区（全宽，无侧边栏）
         content = QHBoxLayout()
         content.setContentsMargins(0, 0, 0, 0)
@@ -507,16 +527,6 @@ class HomeView(QWidget):
         tab_l.addWidget(self._tab_ongoing)
         tab_l.addWidget(self._tab_finished)
         tab_l.addStretch()
-
-        for label, slot in [("随机回忆", self._show_random), ("那年今日", self._show_on_this_day)]:
-            btn = QPushButton(label)
-            btn.setFixedHeight(48)
-            btn.setStyleSheet(f"""
-                QPushButton {{ background: transparent; border: none; color: {FG_DIM}; font-size: 13px; padding: 0 10px; }}
-                QPushButton:hover {{ color: {ACCENT}; }}
-            """)
-            btn.clicked.connect(slot)
-            tab_l.addWidget(btn)
         right_l.addWidget(tab_bar)
 
         # 网格区（stacked）
