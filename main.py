@@ -130,7 +130,7 @@ class ExportWorker(QThread):
             r = self._post(s, "https://www.lianzai365.com/lianzai/PlanCtrl/showHomePage",
                            data={"uid": self.uid, "curPage": page, "pageSize": 100})
             res = r.json().get("results", {})
-            batch = res.get("userPlanDetailDtos", [])
+            batch = res.get("userPlanDetailDtos") or []
             page_count = res.get("pageCount", 1)
             plans.extend(batch)
             if page >= page_count or not batch:
@@ -512,8 +512,8 @@ class MainWindow(QMainWindow):
 
         self._save_settings()
         uid = int(uid_text)
-        ps  = self._play_session_edit.text().strip().strip('"')
-        rm  = self._rememberme_edit.text().strip().strip('"')
+        ps  = self._play_session_edit.text().strip().strip('"').replace('\n', '').replace('\r', '').replace(' ', '')
+        rm  = self._rememberme_edit.text().strip().strip('"').replace('\n', '').replace('\r', '').replace(' ', '')
         cookie = ""
         if ps:
             cookie += f'PLAY_SESSION="{ps}"'
