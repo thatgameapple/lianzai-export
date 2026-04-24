@@ -318,7 +318,7 @@ class ExportWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("轻想连载 · 数据导出")
+        self.setWindowTitle("轻想连载 · 数据导出 v1.4")
         self.setFixedSize(560, 780)
         self._worker   = None
         self._settings = QSettings("lianzai", "exporter")
