@@ -21,12 +21,19 @@ from PyQt6.QtGui import (
 
 BG       = "#f5f5f5"
 BG_WHITE = "#ffffff"
-ACCENT   = "#5aab6e"
+ACCENT       = "#1c7c54"   # 主绿，与 lianzai-web 同款
+ACCENT_DARK  = "#155f3f"   # hover / 渐变深
+ACCENT_LIGHT = "#2d9b67"   # hover 高亮 / FAB
+ACCENT_BG    = "#1c4a38"   # 封面 fallback 深底
 FG       = "#333333"
 FG_DIM   = "#999999"
 FG_LIGHT = "#cccccc"
 BORDER   = "#e8e8e8"
 SIDEBAR_W = 260
+
+# ── 字体 ─────────────────────────────────────────────────────────────────
+SERIF = "Songti SC"        # 标题/纪念感
+SANS  = "PingFang SC"      # UI / 正文 / 数字
 
 
 def ts_to_str(ts, fmt="%Y-%m-%d %H:%M:%S") -> str:
@@ -100,8 +107,8 @@ class BannerWidget(QWidget):
 
         nick = user_info.get("nickName", "")
         name = QLabel(nick)
-        name.setFont(QFont("PingFang SC", 17, QFont.Weight.Bold))
-        name.setStyleSheet("color: white; background: transparent;")
+        name.setFont(QFont(SERIF, 18, QFont.Weight.Bold))
+        name.setStyleSheet("color: white; background: transparent; letter-spacing: 1px;")
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         sig = user_info.get("sign", user_info.get("signature", user_info.get("bio", "")))
@@ -126,7 +133,7 @@ class BannerWidget(QWidget):
             col_l.setSpacing(1)
             col_l.setContentsMargins(24, 0, 24, 0)
             v = QLabel(str(val or 0))
-            v.setFont(QFont("PingFang SC", 14, QFont.Weight.Bold))
+            v.setFont(QFont(SANS, 14, QFont.Weight.Bold))
             v.setStyleSheet("color: white; background: transparent;")
             v.setAlignment(Qt.AlignmentFlag.AlignCenter)
             t = QLabel(lbl)
@@ -154,8 +161,8 @@ class BannerWidget(QWidget):
             painter.drawPixmap(0, 0, self._bg_pix, x, 0, self.width(), self.height())
         else:
             grad = QLinearGradient(0, 0, self.width(), self.height())
-            grad.setColorAt(0, QColor("#3a7a50"))
-            grad.setColorAt(1, QColor("#5aab6e"))
+            grad.setColorAt(0, QColor(ACCENT_BG))
+            grad.setColorAt(1, QColor(ACCENT))
             painter.fillRect(self.rect(), grad)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 80))
         painter.end()
@@ -192,7 +199,7 @@ class SidebarWidget(QWidget):
             col_l.setSpacing(2)
             col_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
             v = QLabel(str(val or 0))
-            v.setFont(QFont("PingFang SC", 15, QFont.Weight.Bold))
+            v.setFont(QFont(SANS, 15, QFont.Weight.Bold))
             v.setStyleSheet(f"color: {FG};")
             v.setAlignment(Qt.AlignmentFlag.AlignCenter)
             t = QLabel(lbl)
@@ -258,6 +265,13 @@ class PlanCard(QWidget):
         self._title   = meta["title"]
         self._cover   = None
 
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(14)
+        shadow.setOffset(0, 2)
+        shadow.setColor(QColor(0, 0, 0, 30))
+        self.setGraphicsEffect(shadow)
+        self._shadow = shadow
+
         img_dir = plan_dir / "images"
         covers  = list(img_dir.glob("cover.*")) if img_dir.exists() else []
         if covers:
@@ -274,11 +288,17 @@ class PlanCard(QWidget):
 
     def enterEvent(self, event):
         self._hovered = True
+        self._shadow.setBlurRadius(22)
+        self._shadow.setOffset(0, 4)
+        self._shadow.setColor(QColor(0, 0, 0, 55))
         self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self._hovered = False
+        self._shadow.setBlurRadius(14)
+        self._shadow.setOffset(0, 2)
+        self._shadow.setColor(QColor(0, 0, 0, 30))
         self.update()
         super().leaveEvent(event)
 
@@ -313,7 +333,7 @@ class PlanCard(QWidget):
         # 4. 标题文字
         p.setClipping(False)
         p.setPen(QColor(FG))
-        p.setFont(QFont("PingFang SC", 12))
+        p.setFont(QFont(SERIF, 13, QFont.Weight.Medium))
         text_rect = QRectF(8, self.IMG_H + 4, w - 16, h - self.IMG_H - 8)
         p.drawText(text_rect,
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter |
@@ -400,8 +420,8 @@ class MemoryDialog(QDialog):
         hdr_l = QHBoxLayout(hdr)
         hdr_l.setContentsMargins(20, 0, 12, 0)
         title_lbl = QLabel(header)
-        title_lbl.setFont(QFont("PingFang SC", 14, QFont.Weight.Bold))
-        title_lbl.setStyleSheet(f"color: {FG};")
+        title_lbl.setFont(QFont(SERIF, 16, QFont.Weight.Bold))
+        title_lbl.setStyleSheet(f"color: {FG}; letter-spacing: 1px;")
         hdr_l.addWidget(title_lbl, 1)
         close_btn = QPushButton("×")
         close_btn.setFixedSize(28, 28)
@@ -645,7 +665,7 @@ class HeroCoverWidget(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        # 1. 背景：封面图或纯绿渐变
+        # 1. 背景：封面图或深绿渐变
         if self._cover:
             scaled = self._cover.scaled(
                 w, h,
@@ -657,8 +677,8 @@ class HeroCoverWidget(QWidget):
             p.drawPixmap(0, 0, scaled, x, y, w, h)
         else:
             grad = QLinearGradient(0, 0, w, h)
-            grad.setColorAt(0, QColor("#3a7a50"))
-            grad.setColorAt(1, QColor("#5aab6e"))
+            grad.setColorAt(0, QColor(ACCENT_BG))
+            grad.setColorAt(1, QColor(ACCENT))
             p.fillRect(0, 0, w, h, grad)
 
         # 2. 底部渐变遮罩（透明 → 黑）
@@ -669,14 +689,14 @@ class HeroCoverWidget(QWidget):
 
         # 3. 标题
         p.setPen(QColor("white"))
-        title_font = QFont("PingFang SC", 20, QFont.Weight.Bold)
+        title_font = QFont(SERIF, 22, QFont.Weight.Bold)
         p.setFont(title_font)
         title_rect = QRectF(24, h - 72, w - 48, 36)
         p.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._title)
 
         # 4. 副标题
         p.setPen(QColor(255, 255, 255, 180))
-        sub_font = QFont("PingFang SC", 12)
+        sub_font = QFont(SANS, 12)
         p.setFont(sub_font)
         sub_rect = QRectF(24, h - 34, w - 48, 22)
         p.drawText(sub_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self._subtitle)
@@ -712,12 +732,12 @@ class StageCard(QWidget):
         num_row_l.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         num_lbl = QLabel(str(index))
-        num_lbl.setFont(QFont("PingFang SC", 15, QFont.Weight.Bold))
+        num_lbl.setFont(QFont(SANS, 15, QFont.Weight.Bold))
         num_lbl.setStyleSheet(f"color: {ACCENT}; background: transparent;")
         num_row_l.addWidget(num_lbl)
 
         dot_lbl = QLabel("●")
-        dot_lbl.setFont(QFont("PingFang SC", 8))
+        dot_lbl.setFont(QFont(SANS, 8))
         dot_lbl.setStyleSheet(f"color: {ACCENT}; background: transparent;")
         num_row_l.addWidget(dot_lbl)
 
@@ -870,7 +890,7 @@ class PlanDetailView(QWidget):
                 background: transparent; border: none;
                 color: {ACCENT}; font-size: 14px;
             }}
-            QPushButton:hover {{ color: #3a7a50; }}
+            QPushButton:hover {{ color: {ACCENT_DARK}; }}
         """)
         back_btn.clicked.connect(self.back)
         top_l.addWidget(back_btn)
@@ -979,8 +999,8 @@ class MainWindow(QMainWindow):
         wl.setSpacing(16)
 
         logo = QLabel("轻想纪念版")
-        logo.setFont(QFont("PingFang SC", 28, QFont.Weight.Bold))
-        logo.setStyleSheet(f"color: {ACCENT};")
+        logo.setFont(QFont(SERIF, 32, QFont.Weight.Bold))
+        logo.setStyleSheet(f"color: {ACCENT}; letter-spacing: 4px;")
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         hint = QLabel("将备份文件夹拖入此处，或点击下方按钮打开")
@@ -994,7 +1014,7 @@ class MainWindow(QMainWindow):
                 background: {ACCENT}; color: white;
                 border: none; border-radius: 8px; font-size: 14px;
             }}
-            QPushButton:hover {{ background: #4e9860; }}
+            QPushButton:hover {{ background: {ACCENT_LIGHT}; }}
         """)
         open_btn.clicked.connect(self._open_folder)
 
@@ -1082,7 +1102,7 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setFont(QFont("PingFang SC", 13))
+    app.setFont(QFont(SANS, 13))
     w = MainWindow()
     w.show()
     sys.exit(app.exec())
