@@ -16,16 +16,22 @@ from PyQt6.QtGui import QFont
 import requests
 
 # ── 主题色 ────────────────────────────────────────────────────────────────
+# 与 lianzai-reader / lianzai-web / PL / VM 系列同款
 
-BG       = "#ffffff"
-BG_INPUT = "#f5f5f5"
-BG_BTN   = "#eeeeee"
-ACCENT   = "#5aab6e"
-FG       = "#1a1a1a"
-FG_DIM   = "#888888"
-BORDER   = "#e0e0e0"
-SUCCESS  = "#5aab6e"
-ERROR    = "#d94f4f"
+BG          = "#ffffff"
+BG_INPUT    = "#f5f5f5"
+BG_BTN      = "#eeeeee"
+ACCENT      = "#1c7c54"   # 主绿，与 reader/web 同款
+ACCENT_DARK = "#155f3f"   # hover
+FG          = "#333333"
+FG_DIM      = "#999999"
+BORDER      = "#e8e8e8"
+SUCCESS     = "#1c7c54"
+ERROR       = "#d94f4f"
+
+# ── 字体 ─────────────────────────────────────────────────────────────────
+SERIF = "Songti SC"        # 标题/纪念感
+SANS  = "PingFang SC"      # UI / 正文 / 数字
 
 
 # ── 抓取逻辑（Worker 线程）────────────────────────────────────────────────
@@ -150,7 +156,7 @@ class ExportWorker(QThread):
             title = plan.get("goal", f"连载_{plan.get('planId')}")
             self.progress.emit(i, total, title)
             try:
-                did_skip = self._save_plan(s, plan, user)
+                did_skip = self._save_plan(s, plan, user, i, total)
                 if did_skip:
                     skipped += 1
             except Exception as e:
@@ -166,7 +172,7 @@ class ExportWorker(QThread):
             summary += f"，{failed} 个失败"
         self.finished.emit(True, str(self.out_dir) + "|" + summary)
 
-    def _save_plan(self, s, plan: dict, user: dict) -> bool:
+    def _save_plan(self, s, plan: dict, user: dict, idx: int = 0, total: int = 0) -> bool:
         """返回 True 表示跳过（增量）"""
         plan_id    = plan.get("planId")
         plan_uid   = plan.get("uid", self.uid)
@@ -215,6 +221,7 @@ class ExportWorker(QThread):
         # 抓阶段
         stages, page = [], 1
         while True:
+            self.progress.emit(idx, total, f"{title} · 抓章节 第{page}页")
             r = self._get(s, "https://www.lianzai365.com/api/v2/stage/stages",
                           params={"planUid": plan_uid, "planId": plan_id,
                                   "curPage": page, "pageSize": 15,
@@ -227,6 +234,9 @@ class ExportWorker(QThread):
             page += 1
             time.sleep(0.3)
 
+        if stages:
+            self.log.emit(f"     共 {len(stages)} 篇", FG_DIM)
+
         # 生成 Markdown + 抓评论
         md = [f"# {title}\n"]
         if desc:
@@ -234,7 +244,9 @@ class ExportWorker(QThread):
         md.append(f"创建时间：{created}  {'🔒 私密' if is_private else '🌐 公开'}\n")
         md.append("---\n")
 
+        n_stages = len(stages)
         for i, stage in enumerate(stages, 1):
+            self.progress.emit(idx, total, f"{title} · 第 {i}/{n_stages} 篇")
             stage_id      = stage.get("stageId", i)
             html_text     = stage.get("html", "").strip()
             img_field     = stage.get("img", "")
@@ -248,10 +260,12 @@ class ExportWorker(QThread):
                 md.append(clean + "\n")
 
             if img_field:
-                for entry in img_field.split(","):
-                    img_url = entry.split("|")[0].strip()
+                imgs = [e.split("|")[0].strip() for e in img_field.split(",") if e.strip()]
+                for j, img_url in enumerate(imgs, 1):
                     if not img_url:
                         continue
+                    if len(imgs) > 1:
+                        self.progress.emit(idx, total, f"{title} · 第 {i}/{n_stages} 篇 · 图 {j}/{len(imgs)}")
                     tail = img_url.rstrip("/").split("/")[-1]
                     tail = re.sub(r'[\\:*?"<>|]', '_', tail)
                     img_name = f"stage_{stage_id}_{tail}"
@@ -265,6 +279,7 @@ class ExportWorker(QThread):
 
             stage_comments = []
             if comment_count:
+                self.progress.emit(idx, total, f"{title} · 第 {i}/{n_stages} 篇 · 抓评论")
                 stage_comments = self._fetch_comments(s, plan_id, stage_id)
                 if stage_comments:
                     md.append("\n**评论：**\n")
@@ -318,7 +333,7 @@ class ExportWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("轻想连载 · 数据导出 v1.4")
+        self.setWindowTitle("轻想连载 · 数据导出 v1.5")
         self.setFixedSize(560, 780)
         self._worker   = None
         self._settings = QSettings("lianzai", "exporter")
@@ -366,7 +381,7 @@ class MainWindow(QMainWindow):
 
         # 标题
         title = QLabel("轻想连载")
-        title.setFont(QFont("PingFang SC", 22, QFont.Weight.Bold))
+        title.setFont(QFont(SERIF, 24, QFont.Weight.Bold))
         title.setStyleSheet(f"color: {ACCENT};")
         sub = QLabel("数据导出工具  ·  备份你的记忆")
         sub.setStyleSheet(f"color: {FG_DIM}; font-size: 13px;")
@@ -473,7 +488,7 @@ class MainWindow(QMainWindow):
                 border: none; border-radius: 6px;
                 font-size: 14px; font-weight: bold;
             }}
-            QPushButton:hover {{ background: #4e9860; }}
+            QPushButton:hover {{ background: {ACCENT_DARK}; }}
             QPushButton:disabled {{ background: {BG_BTN}; color: {FG_DIM}; }}
         """
 
@@ -562,7 +577,8 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setFont(QFont("PingFang SC", 13))
+    app.setFont(QFont(SANS, 13))
     w = MainWindow()
     w.show()
     sys.exit(app.exec())
+
